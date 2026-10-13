@@ -11,9 +11,9 @@ NOTION_API_VERSION = "2022-06-28"
 NOTION_BASE_URL = "https://api.notion.com/v1"
 
 def get_notion_headers(api_key=None):
-    token = api_key or os.getenv("NOTION_API_KEY")
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
     if not token:
-        raise ValueError("Missing NOTION_API_KEY. Please provide an API key or configure it in .env.")
+        raise ValueError("Missing NOTION_API_KEY / NOTION_TOKEN. Please provide an API key or configure it in the environment.")
     return {
         "Authorization": f"Bearer {token}",
         "Notion-Version": NOTION_API_VERSION,
@@ -373,8 +373,10 @@ def query_notion_database(api_key=None, database_id=None, filter_mode="manifest_
       - 'verified': queries Verified/Reviewed == True
       - 'all': queries all database pages
     """
-    token = api_key or os.getenv("NOTION_API_KEY")
-    db_id = database_id or os.getenv("NOTION_DATABASE_ID")
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
+    db_id = database_id or os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PARTICIPANT_DB_ID") or os.getenv("NOTION_CASES_DB_ID")
+    if not db_id:
+        raise ValueError("Missing NOTION_DATABASE_ID / NOTION_PARTICIPANT_DB_ID. Please configure it in the environment.")
     headers = get_notion_headers(token)
     
     url = f"{NOTION_BASE_URL}/databases/{db_id}/query"
@@ -513,7 +515,7 @@ def update_case_status_in_notion(case_page_ids, target_status="Dispatched to Lab
     Uses concurrency with rate limiting to respect Notion API thresholds,
     and invalidates the in-memory manifest cache upon completion.
     """
-    token = api_key or os.getenv("NOTION_API_KEY")
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
     headers = get_notion_headers(token)
     
     unique_ids = list(dict.fromkeys([cid for cid in case_page_ids if cid]))

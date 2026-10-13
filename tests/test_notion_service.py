@@ -359,5 +359,12 @@ def test_update_case_status_empty():
     assert res["total"] == 0
     assert res["updated"] == 0
 
+def test_notion_token_env_support(monkeypatch):
+    from notion_service import get_notion_headers
+    monkeypatch.delenv("NOTION_API_KEY", raising=False)
+    monkeypatch.setenv("NOTION_TOKEN", "secret_token_123")
+    headers = get_notion_headers()
+    assert headers["Authorization"] == "Bearer secret_token_123"
+
 
 

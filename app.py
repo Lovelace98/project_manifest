@@ -107,8 +107,8 @@ def api_parse():
 @app.route('/api/notion/status', methods=['GET'])
 @login_required
 def api_notion_status():
-    has_key = bool(os.getenv('NOTION_API_KEY'))
-    has_db = bool(os.getenv('NOTION_DATABASE_ID'))
+    has_key = bool(os.getenv('NOTION_API_KEY') or os.getenv('NOTION_TOKEN'))
+    has_db = bool(os.getenv('NOTION_DATABASE_ID') or os.getenv('NOTION_PARTICIPANT_DB_ID') or os.getenv('NOTION_CASES_DB_ID'))
     return jsonify({
         'configured': has_key and has_db,
         'has_api_key': has_key,
