@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  manifest-app:
+    build: .
+    container_name: blueprint-manifest
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

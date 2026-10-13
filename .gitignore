@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+venv/
+.venv/
+.DS_Store
+*.xlsx
+*.docx
+.pytest_cache/
+.vscode/

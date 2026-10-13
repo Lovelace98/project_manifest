@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blueprint DNA Manifest Portal</title>
+    <meta name="description" content="Generate and edit DNA manifest lists from Notion or Word documents to styled Excel sheets.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Main stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Application Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <img src="{{ url_for('static', filename='img/blueprint_logo.png') }}" alt="Blueprint DNA Organization" class="app-brand-logo">
+                <span class="app-sub-badge">Manifest Algorithm</span>
+            </div>
+            <div class="header-actions">
+                <span class="user-pill"><i class="fa-solid fa-circle-user"></i> {{ user or 'Admin' }}</span>
+                <span class="status-badge" id="status-badge"><i class="fa-solid fa-circle-check"></i> Ready</span>
+                <a href="/logout" class="btn btn-logout" title="Sign Out">
+                    <i class="fa-solid fa-right-from-bracket"></i> Sign Out
+                </a>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <!-- Source Selector Tabs -->
+            <section id="source-panel" class="source-panel">
+                <div class="source-tabs">
+                    <button class="source-tab-btn active" id="tab-notion-btn">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> Sync from Notion
+                    </button>
+                    <button class="source-tab-btn" id="tab-word-btn">
+                        <i class="fa-solid fa-file-word"></i> Upload Word (.docx) <span class="badge-legacy">Legacy</span>
+                    </button>
+                </div>
+
+                <!-- Notion Sync View -->
+                <div id="notion-view" class="notion-view">
+                    <div class="notion-sync-card">
+                        <div class="notion-icon-circle"><i class="fa-solid fa-database"></i></div>
+                        <div class="notion-sync-details">
+                            <h3>Notion Manifest Batch Sync</h3>
+                            <p>Directly source verified participant entries from your Notion <strong>Participant Lists</strong> database. Multi-part cases (&gt;4 participants across Part 1, Part 2, Part 3, etc.) are automatically consolidated, and parents always precede children.</p>
+                        </div>
+                        <div class="notion-actions">
+                            <button id="fetch-notion-btn" class="btn btn-primary">
+                                <i class="fa-solid fa-arrows-rotate"></i> Fetch Manifest Batch
+                            </button>
+                            <button id="force-fetch-notion-btn" class="btn btn-outline" title="Bypass cache and pull fresh from Notion">
+                                <i class="fa-solid fa-bolt"></i> Force Refresh
+                            </button>
+                            <span id="notion-status-indicator" class="notion-status-pill">
+                                <i class="fa-solid fa-circle-check"></i> Connected
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Word Upload View (Legacy Fallback) -->
+                <div id="word-view" class="word-view" style="display: none;">
+                    <div class="welcome-text">
+                        <h2>Word Document Parser <span class="badge-legacy">Legacy Source</span></h2>
+                        <p>Upload your weekly Word document (.docx) containing case tables. The parser will extract all participants, arrange parents before children, and let you review before generating Excel.</p>
+                    </div>
+                    <div class="drag-drop-zone" id="drop-zone">
+                        <input type="file" id="file-input" accept=".docx" style="display: none;">
+                        <div class="drop-zone-content">
+                            <div class="icon-circle"><i class="fa-solid fa-file-word"></i></div>
+                            <h3>Drag & drop your manifest file here</h3>
+                            <p>or <span class="browse-link">browse from your computer</span></p>
+                            <span class="file-type-info">Supports only .docx documents</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Editor Panel (Hidden by default) -->
+            <section id="editor-panel" class="editor-panel" style="display: none;">
+                <div class="editor-header">
+                    <div class="editor-title">
+                        <h2>Review DNA Cases</h2>
+                        <p>Loaded cases: <span id="cases-count-badge" class="count-badge">0</span>. Review cases before generating Excel.</p>
+                    </div>
+                    <div class="editor-actions">
+                        <!-- Receiving Lab Filter Dropdown -->
+                        <div class="lab-filter-bar" id="lab-filter-container">
+                            <label for="lab-filter-select"><i class="fa-solid fa-flask"></i> Lab:</label>
+                            <select id="lab-filter-select" class="lab-select">
+                                <option value="ALL">All Receiving Labs</option>
+                            </select>
+                        </div>
+                        <button id="add-case-btn" class="btn btn-secondary"><i class="fa-solid fa-plus"></i> Add Case</button>
+                        <!-- Move to Dispatched toggle (Notion syncs) -->
+                        <label class="auto-dispatch-toggle" id="auto-dispatch-label" title="Automatically advance exported cases from 'Manifest Awaiting' to 'Dispatched to Laboratory' in Notion upon export">
+                            <input type="checkbox" id="auto-dispatch-checkbox" checked>
+                            <span class="toggle-custom"></span>
+                            <span class="toggle-text"><i class="fa-solid fa-truck-fast"></i> Move to Dispatched</span>
+                        </label>
+                        <button id="export-excel-btn" class="btn btn-primary"><i class="fa-solid fa-file-excel"></i> Export to Excel</button>
+                        <button id="upload-another-btn" class="btn btn-outline"><i class="fa-solid fa-rotate-left"></i> Source Another</button>
+                    </div>
+                </div>
+
+                <!-- Case Cards Grid -->
+                <div class="cases-grid" id="cases-grid">
+                    <!-- Dynamic case cards loaded here -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Spinner Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="spinner-container">
+            <div class="double-helix">
+                <div class="dot dot-1"></div>
+                <div class="dot dot-2"></div>
+                <div class="dot dot-3"></div>
+                <div class="dot dot-4"></div>
+            </div>
+            <h3 id="loader-title">Processing data...</h3>
+            <p id="loader-desc">Analyzing participants and formatting manifest records.</p>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Main application logic -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
