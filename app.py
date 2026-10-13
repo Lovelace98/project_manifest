@@ -4,7 +4,7 @@ import tempfile
 import webbrowser
 import threading
 from datetime import timedelta
-from flask import Flask, request, jsonify, send_file, render_template, session, redirect, url_for
+from flask import Flask, request, jsonify, send_file, render_template, session, redirect, url_for, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 
@@ -39,6 +39,15 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 def health():
     """Health check endpoint for container monitoring and Dokploy VPS."""
     return jsonify({'status': 'healthy', 'service': 'blueprint-manifest'}), 200
+
+@app.route('/favicon.ico')
+def favicon():
+    """Direct root favicon route for browsers and web crawlers."""
+    return send_from_directory(
+        os.path.join(app.root_path, 'static', 'img'),
+        'favicon.ico',
+        mimetype='image/vnd.microsoft.icon'
+    )
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():

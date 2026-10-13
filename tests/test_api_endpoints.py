@@ -97,3 +97,9 @@ def test_update_status_unauthenticated():
         data = rv.get_json()
         assert "Authentication required" in data["error"]
 
+def test_favicon_route(client):
+    rv = client.get('/favicon.ico')
+    assert rv.status_code == 200
+    assert rv.mimetype == "image/vnd.microsoft.icon"
+    assert len(rv.data) > 0
+
