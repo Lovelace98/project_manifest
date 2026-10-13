@@ -64,19 +64,21 @@ function checkNotionStatus() {
  * Source Tab Navigation
  * ------------------------------------------------------------- */
 
-tabNotionBtn.addEventListener('click', () => {
-    tabNotionBtn.classList.add('active');
-    tabWordBtn.classList.remove('active');
-    notionView.style.display = 'block';
-    wordView.style.display = 'none';
-});
+if (tabNotionBtn && tabWordBtn) {
+    tabNotionBtn.addEventListener('click', () => {
+        tabNotionBtn.classList.add('active');
+        tabWordBtn.classList.remove('active');
+        if (notionView) notionView.style.display = 'block';
+        if (wordView) wordView.style.display = 'none';
+    });
 
-tabWordBtn.addEventListener('click', () => {
-    tabWordBtn.classList.add('active');
-    tabNotionBtn.classList.remove('active');
-    wordView.style.display = 'block';
-    notionView.style.display = 'none';
-});
+    tabWordBtn.addEventListener('click', () => {
+        tabWordBtn.classList.add('active');
+        tabNotionBtn.classList.remove('active');
+        if (wordView) wordView.style.display = 'block';
+        if (notionView) notionView.style.display = 'none';
+    });
+}
 
 /* -------------------------------------------------------------
  * Notion Fetch Action & Cache Shield
@@ -184,37 +186,39 @@ function filterCasesByLab(lab) {
  * Word Document Upload Fallback
  * ------------------------------------------------------------- */
 
-['dragenter', 'dragover'].forEach(eventName => {
-    dropZone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-    }, false);
-});
+if (dropZone && fileInput) {
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        }, false);
+    });
 
-['dragleave', 'drop'].forEach(eventName => {
-    dropZone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
-    }, false);
-});
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        }, false);
+    });
 
-dropZone.addEventListener('drop', (e) => {
-    const dt = e.dataTransfer;
-    const files = dt.files;
-    if (files.length > 0) {
-        handleFileSelect(files[0]);
-    }
-});
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) {
+            handleFileSelect(files[0]);
+        }
+    });
 
-dropZone.addEventListener('click', () => {
-    fileInput.click();
-});
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
 
-fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        handleFileSelect(e.target.files[0]);
-    }
-});
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
+}
 
 function handleFileSelect(file) {
     if (!file.name.toLowerCase().endsWith('.docx')) {
@@ -617,7 +621,7 @@ addCaseBtn.addEventListener('click', () => {
 uploadAnotherBtn.addEventListener('click', () => {
     cases = [];
     allCases = [];
-    fileInput.value = '';
+    if (fileInput) fileInput.value = '';
     editorPanel.style.display = 'none';
     sourcePanel.style.display = 'block';
     updateStatus('Ready', 'fa-check');
