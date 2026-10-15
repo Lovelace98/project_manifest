@@ -1,6 +1,6 @@
 # Dokploy Deployment Guide for Hostinger VPS
 
-This guide walks you through deploying the **Project Manifest** application to a **Hostinger VPS** using **Dokploy**.
+This guide walks you through deploying the unified **Blueprint DNA Operations Super App** (combining **Manifest Portal** and **Report Bot**) to a **Hostinger VPS** using **Dokploy**.
 
 ---
 
@@ -8,10 +8,12 @@ This guide walks you through deploying the **Project Manifest** application to a
 
 * **Server:** Hostinger VPS (Ubuntu 24.04 LTS)
 * **PaaS Manager:** [Dokploy](https://dokploy.com) (handles Docker containers, Traefik reverse proxy, and Let's Encrypt SSL)
-* **Application:** Flask + Gunicorn (2 workers, 4 threads, 120s timeout)
+* **Application:** FastAPI + Uvicorn (ASGI async runner with LibreOffice Writer, PyMuPDF, and ephemeral in-memory JobStore)
 * **Port:** `5000`
 * **Health Check:** `/health`
-* **Reverse Proxy Integration:** Werkzeug `ProxyFix` (enabled for proper client IP rate limiting and HTTPS redirects behind Traefik)
+* **Apps Included:**
+  * 📋 **Manifest Portal:** Live Notion batch sync, parent-before-child ordering, and Excel generator.
+  * 📑 **Report Bot:** Eurofins/UFC/Hong Kong PDF extraction, legal verification pages, rebranding, and AES-256 encryption.
 
 ---
 
@@ -108,12 +110,16 @@ If this repository is not yet connected to a Git remote:
 In your application's settings, go to the **Environment** tab and paste your production environment variables:
 
 ```env
-# Web Authentication
+# Unified Web Authentication & Session
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=SetAStrongProductionPasswordHere!
 SECRET_KEY=paste_a_secure_random_64_char_key_here
 SESSION_TTL_HOURS=12
 SESSION_COOKIE_SECURE=true
+
+# Report Bot Configuration
+REPORT_BOT_DEV_PASSWORD=SetAStrongProductionPasswordHere!
+REPORT_BOT_PDF_OWNER_PASSWORD=at-least-16-chars-owner-secret
 
 # Notion API Configuration
 NOTION_TOKEN=ntn_your_actual_notion_secret_token
@@ -121,7 +127,7 @@ NOTION_PARTICIPANT_DB_ID=281dbd83-c9c2-4342-8a93-92574ef8ed15
 NOTION_CASES_DB_ID=382c226a-2e86-48f1-b70e-c4e9e8f62d1d
 NOTION_CACHE_TTL_SECONDS=180
 
-# Port
+# Port & Server
 PORT=5000
 ```
 

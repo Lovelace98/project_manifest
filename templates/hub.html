@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blueprint DNA Operations Hub</title>
+    <meta name="description" content="Unified Operations Hub for Blueprint DNA Organization: Manifest Generation and Laboratory Report Rebranding.">
+    
+    <!-- CSRF & App Configuration Metadata -->
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <meta name="default-review-mode" content="{{ default_review_mode or 'REVIEW' }}">
+    <meta name="max-batch-files" content="{{ max_batch_files or 25 }}">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/img/apple-touch-icon.png">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="/static/css/hub.css">
+    <link rel="stylesheet" href="/static/css/index.css">
+    <link rel="stylesheet" href="/static/css/report_bot.css">
+</head>
+<body>
+    <div class="super-app-shell">
+        <!-- Sidebar Navigation -->
+        <aside id="app-sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <img src="/brand/logo" alt="Blueprint DNA Organization" class="sidebar-brand-logo">
+                <span class="sidebar-brand-badge">OPERATIONS HUB</span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <span class="nav-section-label">Core Applications</span>
+                <button class="nav-item-btn active" data-target="manifest" id="nav-btn-manifest">
+                    <i class="fa-solid fa-table-list"></i>
+                    <span class="nav-text">Manifest Portal</span>
+                    <span class="nav-badge-pill" id="sidebar-manifest-count">Notion</span>
+                </button>
+                <button class="nav-item-btn" data-target="reports" id="nav-btn-reports">
+                    <i class="fa-solid fa-file-shield"></i>
+                    <span class="nav-text">Report Bot</span>
+                    <span class="nav-badge-pill">Lab PDFs</span>
+                </button>
+
+                <span class="nav-section-label" style="margin-top: 14px;">System</span>
+                <button class="nav-item-btn" data-target="settings" id="nav-btn-settings">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span class="nav-text">Settings &amp; Health</span>
+                </button>
+            </nav>
+
+            <!-- Live Service Status Indicators -->
+            <div class="sidebar-status-box">
+                <div class="status-box-header">
+                    <span class="status-box-title">System Status</span>
+                </div>
+                <div class="status-items-list">
+                    <div class="status-row" id="status-row-notion">
+                        <span class="status-label"><i class="fa-solid fa-cloud"></i> Notion Sync</span>
+                        <span id="notion-status-badge" class="service-pill {{ 'pill-ready' if notion_ready else 'pill-issue' }}">
+                            <span class="pill-dot"></span> {{ 'Ready' if notion_ready else 'Issue' }}
+                        </span>
+                    </div>
+                    <div class="status-row" id="status-row-libreoffice">
+                        <span class="status-label"><i class="fa-solid fa-file-pdf"></i> LibreOffice</span>
+                        <span id="libreoffice-status-badge" class="service-pill {{ 'pill-ready' if libreoffice_ready else 'pill-issue' }}">
+                            <span class="pill-dot"></span> {{ 'Ready' if libreoffice_ready else 'Issue' }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="user-profile-bar">
+                    <div class="user-meta">
+                        <div class="user-avatar-circle">
+                            <i class="fa-solid fa-user"></i>
+                        </div>
+                        <div class="user-info-text">
+                            <span class="user-display-name">{{ user or 'Admin' }}</span>
+                            <span class="user-role-label">Operations Lead</span>
+                        </div>
+                    </div>
+                    <a href="/logout" class="sidebar-logout-link" title="Sign Out">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out
+                    </a>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Viewport -->
+        <div class="main-viewport">
+            <header class="super-topbar">
+                <div class="topbar-left">
+                    <button id="mobile-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle navigation">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                    <div class="active-app-heading">
+                        <div class="active-app-icon-wrap">
+                            <i id="active-app-icon" class="fa-solid fa-table-list"></i>
+                        </div>
+                        <h1 id="active-app-title" class="active-app-title">Manifest Portal — Notion Sync &amp; Export</h1>
+                    </div>
+                </div>
+                <div class="topbar-right">
+                    <span class="status-badge" id="status-badge"><i class="fa-solid fa-circle-check"></i> Ready</span>
+                    <span id="notion-status-indicator" class="notion-status-pill">
+                        <i class="fa-solid fa-circle-check"></i> Connected
+                    </span>
+                    <span class="retention-chip" style="margin: 0; font-size: 0.76rem;" title="Automatic Ephemeral Cleanup">
+                        <span aria-hidden="true">◷</span> 1h Cache Retention
+                    </span>
+                </div>
+            </header>
+
+            <main class="workspace-container">
+                <!-- =========================================================
+                     PANEL 1: MANIFEST PORTAL
+                     ========================================================= -->
+                <section id="panel-manifest" class="workspace-panel active">
+                    <div class="app-container" style="max-width: 100%; padding: 0;">
+                        <!-- Source Selector Panel -->
+                        <section id="source-panel" class="source-panel">
+                            <div id="notion-view" class="notion-view">
+                                <div class="notion-sync-card">
+                                    <div class="notion-icon-circle"><i class="fa-solid fa-database"></i></div>
+                                    <div class="notion-sync-details">
+                                        <h3>Notion Manifest Batch Sync</h3>
+                                        <p>Directly source verified participant entries from your Notion <strong>Participant Lists</strong> database. Multi-part cases (&gt;4 participants across Part 1, Part 2, Part 3) are automatically consolidated, and parents always precede children.</p>
+                                    </div>
+                                    <div class="notion-actions">
+                                        <button id="fetch-notion-btn" class="btn btn-primary">
+                                            <i class="fa-solid fa-arrows-rotate"></i> Fetch Manifest Batch
+                                        </button>
+                                        <button id="force-fetch-notion-btn" class="btn btn-outline" title="Bypass cache and pull fresh from Notion">
+                                            <i class="fa-solid fa-bolt"></i> Force Refresh
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Editor Panel -->
+                        <section id="editor-panel" class="editor-panel" style="display: none;">
+                            <div class="editor-header">
+                                <div class="editor-title">
+                                    <h2>Review DNA Cases</h2>
+                                    <p>Loaded cases: <span id="cases-count-badge" class="count-badge">0</span>. Review cases before generating Excel.</p>
+                                </div>
+                                <div class="editor-actions">
+                                    <!-- Receiving Lab Filter Dropdown -->
+                                    <div class="lab-filter-bar" id="lab-filter-container">
+                                        <label for="lab-filter-select"><i class="fa-solid fa-flask"></i> Lab:</label>
+                                        <select id="lab-filter-select" class="lab-select">
+                                            <option value="ALL">All Receiving Labs</option>
+                                        </select>
+                                    </div>
+                                    <button id="add-case-btn" class="btn btn-secondary">
+                                        <i class="fa-solid fa-plus"></i> Add Case
+                                    </button>
+                                    <!-- Move to Dispatched toggle (Notion syncs) -->
+                                    <label class="auto-dispatch-toggle" id="auto-dispatch-label" title="Automatically advance exported cases from 'Manifest Awaiting' to 'Dispatched to Laboratory' in Notion upon export">
+                                        <input type="checkbox" id="auto-dispatch-checkbox" checked>
+                                        <span class="toggle-custom"></span>
+                                        <span class="toggle-text"><i class="fa-solid fa-truck-fast"></i> Move to Dispatched</span>
+                                    </label>
+                                    <button id="export-excel-btn" class="btn btn-primary">
+                                        <i class="fa-solid fa-file-excel"></i> Export to Excel
+                                    </button>
+                                    <button id="upload-another-btn" class="btn btn-outline">
+                                        <i class="fa-solid fa-rotate-left"></i> Source Another
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="cases-grid" id="cases-grid">
+                                <!-- Dynamically generated case cards -->
+                            </div>
+                        </section>
+                    </div>
+
+                </section>
+
+                <!-- =========================================================
+                     PANEL 2: REPORT BOT
+                     ========================================================= -->
+                <section id="panel-reports" class="workspace-panel">
+                    <main class="workspace" style="max-width: 100%; padding: 0;">
+                        <section class="page-heading">
+                            <div>
+                                <p class="eyebrow">BLUEPRINT DNA OPERATIONS</p>
+                                <h1>Prepare laboratory reports</h1>
+                                <p class="lede">Upload, review, rebrand, secure, and download up to {{ max_batch_files or 25 }} reports.</p>
+                            </div>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <button class="button button-secondary" type="button" data-open-settings style="min-height: 36px; padding: 6px 14px; font-size: 0.85rem;">
+                                    <i class="fa-solid fa-sliders"></i> Default Modes
+                                </button>
+                                <div class="retention-chip" title="Job files are deleted automatically">
+                                    <span aria-hidden="true">◷</span> One-hour retention
+                                </div>
+                            </div>
+                        </section>
+
+                        <ol class="stepper" aria-label="Report workflow">
+                            <li class="is-current" data-step="upload"><span>1</span>Upload</li>
+                            <li data-step="review"><span>2</span>Review</li>
+                            <li data-step="process"><span>3</span>Process</li>
+                            <li data-step="download"><span>4</span>Download</li>
+                        </ol>
+
+                        <div id="global-alert" class="alert is-hidden" role="status" aria-live="polite"></div>
+
+                        <!-- Upload Panel -->
+                        <section id="upload-panel" class="panel" aria-labelledby="upload-title">
+                            <div class="panel-heading">
+                                <div>
+                                    <p class="eyebrow">NEW BATCH</p>
+                                    <h2 id="upload-title">Upload reports</h2>
+                                </div>
+                                <span class="status-chip status-neutral">PDF · MAX {{ max_batch_files or 25 }}</span>
+                            </div>
+                            <form id="upload-form">
+                                <label id="drop-zone" class="drop-zone" for="pdf-files">
+                                    <span class="drop-icon" aria-hidden="true">⇧</span>
+                                    <strong>Drop report PDFs here</strong>
+                                    <span>or choose files from your computer</span>
+                                    <input id="pdf-files" name="files" type="file" accept="application/pdf,.pdf" multiple>
+                                </label>
+                                <div id="selected-files" class="selected-files" aria-live="polite"></div>
+                                <div class="batch-controls">
+                                    <fieldset>
+                                        <legend>Laboratory source</legend>
+                                        <label class="choice-card">
+                                            <input type="radio" name="lab_source" value="EUROFINS" checked>
+                                            <span><strong>Eurofins</strong><small>Eurofins DNA reports.</small></span>
+                                        </label>
+                                        <label class="choice-card">
+                                            <input type="radio" name="lab_source" value="UFC">
+                                            <span><strong>UFC</strong><small>Universal Forensics reports.</small></span>
+                                        </label>
+                                        <label class="choice-card">
+                                            <input type="radio" name="lab_source" value="HONG_KONG">
+                                            <span><strong>Hong Kong Lab</strong><small>Prenatal DNA reports (password only).</small></span>
+                                        </label>
+                                    </fieldset>
+                                    <fieldset>
+                                        <legend>Operating mode</legend>
+                                        <label class="choice-card">
+                                            <input type="radio" name="review_mode" value="REVIEW">
+                                            <span><strong>Review</strong><small>Confirm every extracted report.</small></span>
+                                        </label>
+                                        <label class="choice-card">
+                                            <input type="radio" name="review_mode" value="AUTO_APPROVE">
+                                            <span><strong>Auto Approve</strong><small>Process clean files; quarantine exceptions.</small></span>
+                                        </label>
+                                    </fieldset>
+                                    <fieldset>
+                                        <legend>Default report type</legend>
+                                        <label class="choice-card">
+                                            <input type="radio" name="default_case_type" value="PERSONAL" checked>
+                                            <span><strong>Personal</strong><small>Edited laboratory report only.</small></span>
+                                        </label>
+                                        <label class="choice-card">
+                                            <input type="radio" name="default_case_type" value="CERTIFIED_LEGAL">
+                                            <span><strong>Certified / Legal</strong><small>Add verification pages first.</small></span>
+                                        </label>
+                                    </fieldset>
+                                    <fieldset>
+                                        <legend>Notion Case Sync</legend>
+                                        <label class="choice-card" style="grid-column: span 2;">
+                                            <input type="checkbox" id="auto-sync-notion" name="auto_sync_notion" checked>
+                                            <span><strong>Auto-Update Notion Status</strong><small>Switch matched cases to "Result Review" in Notion upon completion.</small></span>
+                                        </label>
+                                    </fieldset>
+                                </div>
+                                <div class="panel-actions">
+                                    <p>Only text-native PDF reports are supported.</p>
+                                    <button id="upload-button" class="button button-primary" type="submit">Extract reports</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <!-- Job Panel -->
+                        <section id="job-panel" class="panel is-hidden" aria-labelledby="job-title">
+                            <div class="panel-heading">
+                                <div>
+                                    <p class="eyebrow">ACTIVE BATCH</p>
+                                    <h2 id="job-title">Review extracted details</h2>
+                                </div>
+                                <span id="job-state" class="status-chip status-neutral">AWAITING REVIEW</span>
+                            </div>
+
+                            <div id="notion-sync-banner" class="alert is-hidden" role="status" aria-live="polite" style="margin-bottom: 16px;"></div>
+
+                            <div id="processing-summary" class="processing-summary is-hidden">
+                                <div class="progress-copy"><strong id="progress-label">Processing reports</strong><span id="progress-value">0%</span></div>
+                                <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+                            </div>
+
+                            <div class="review-layout">
+                                <nav id="file-rail" class="file-rail" aria-label="Reports in this batch"></nav>
+                                <div id="review-detail" class="review-detail">
+                                    <div class="empty-state"><strong>Select a report</strong><span>Extracted details will appear here.</span></div>
+                                </div>
+                            </div>
+
+                            <div class="panel-actions">
+                                <p id="batch-expiry">Files expire one hour after upload.</p>
+                                <div class="button-row">
+                                    <button id="new-batch-button" class="button button-secondary" type="button">New batch</button>
+                                    <button id="sync-notion-button" class="button button-secondary is-hidden" type="button" style="background: #E0F2FE; color: #0369A1; border: 1px solid #BAE6FD; font-weight: 600;">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i> Sync to Notion (Result Review)
+                                    </button>
+                                    <button id="process-button" class="button button-primary" type="button" disabled>Process approved</button>
+                                    <a id="download-button" class="button button-success is-hidden" href="#">Download ZIP</a>
+                                </div>
+                            </div>
+                        </section>
+                    </main>
+
+                    <!-- Settings Dialog -->
+                    <dialog id="settings-dialog" class="settings-dialog">
+                        <form method="dialog" class="dialog-card">
+                            <div class="dialog-heading">
+                                <div><p class="eyebrow">TEAM SETTINGS</p><h2>Default operating mode</h2></div>
+                                <button class="icon-button" value="cancel" aria-label="Close settings">×</button>
+                            </div>
+                            <p>This default applies to new batches and can be changed during upload.</p>
+                            <label class="choice-card">
+                                <input type="radio" name="settings_review_mode" value="REVIEW">
+                                <span><strong>Review</strong><small>Require confirmation for every report.</small></span>
+                            </label>
+                            <label class="choice-card">
+                                <input type="radio" name="settings_review_mode" value="AUTO_APPROVE">
+                                <span><strong>Auto Approve</strong><small>Process only high-confidence reports automatically.</small></span>
+                            </label>
+                            <dl class="rules-list">
+                                <div><dt>Source</dt><dd>Eurofins &amp; UFC</dd></div>
+                                <div><dt>Retention</dt><dd>One hour</dd></div>
+                                <div><dt>Sample type</dt><dd>BUCCAL SWAB</dd></div>
+                            </dl>
+                            <div class="dialog-actions">
+                                <button class="button button-secondary" value="cancel">Cancel</button>
+                                <button id="save-settings" class="button button-primary" type="button">Save setting</button>
+                            </div>
+                        </form>
+                    </dialog>
+                </section>
+
+                <!-- =========================================================
+                     PANEL 3: SETTINGS & HEALTH
+                     ========================================================= -->
+                <section id="panel-settings" class="workspace-panel">
+                    <div style="max-width: 900px; display: flex; flex-direction: column; gap: 24px;">
+                        <div class="notion-sync-card" style="margin-bottom: 0;">
+                            <div class="notion-icon-circle"><i class="fa-solid fa-server"></i></div>
+                            <div class="notion-sync-details">
+                                <h3>Dokploy Hostinger VPS Deployment</h3>
+                                <p>Application running on <strong>Port 5000</strong>. Reverse proxy SSL handled via Traefik. Single worker process active for in-memory job coordination.</p>
+                            </div>
+                            <div class="notion-actions">
+                                <span class="notion-status-pill" style="background: #ECFDF5; color: #059669; border-color: #A7F3D0;">
+                                    <i class="fa-solid fa-check"></i> Healthy
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="notion-sync-card" style="margin-bottom: 0;">
+                            <div class="notion-icon-circle"><i class="fa-solid fa-lock"></i></div>
+                            <div class="notion-sync-details">
+                                <h3>Security &amp; Encryption Standards</h3>
+                                <p>All Certified/Legal and Personal reports are encrypted using <strong>AES-256</strong>. Password formula: <code>124bdo{MM}</code> based on collection month. Private batch files automatically purged after 1 hour.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <!-- Double-Helix Loading Overlay (Global) -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="spinner-container">
+            <div class="double-helix">
+                <div class="dot dot-1"></div>
+                <div class="dot dot-2"></div>
+                <div class="dot dot-3"></div>
+                <div class="dot dot-4"></div>
+            </div>
+            <h3 id="loader-title">Processing data...</h3>
+            <p id="loader-desc">Analyzing participants and formatting manifest records.</p>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container (Global) -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/static/js/hub.js"></script>
+    <script src="/static/js/manifest.js"></script>
+    <script src="/static/js/report_bot.js"></script>
+</body>
+</html>

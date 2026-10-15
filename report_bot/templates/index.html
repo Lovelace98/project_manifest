@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block metadata %}
+<meta name="csrf-token" content="{{ csrf_token }}">
+<meta name="default-review-mode" content="{{ default_review_mode }}">
+<meta name="max-batch-files" content="{{ max_batch_files }}">
+{% endblock %}
+{% block body %}
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/" aria-label="Blueprint Report Bot home">
+      <img src="/brand/logo" alt="">
+      <span><strong>Report Bot</strong><small>OPERATIONS WORKSPACE</small></span>
+    </a>
+    <div class="topbar-actions">
+      <button class="button button-quiet" type="button" data-open-settings>Settings</button>
+      <button class="button button-quiet" type="button" data-logout>Sign out</button>
+    </div>
+  </div>
+</header>
+
+<main class="workspace">
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">BLUEPRINT DNA OPERATIONS</p>
+      <h1>Prepare laboratory reports</h1>
+      <p class="lede">Upload, review, rebrand, secure, and download up to {{ max_batch_files }} reports.</p>
+    </div>
+    <div class="retention-chip" title="Job files are deleted automatically">
+      <span aria-hidden="true">◷</span> One-hour retention
+    </div>
+  </section>
+
+  <ol class="stepper" aria-label="Report workflow">
+    <li class="is-current" data-step="upload"><span>1</span>Upload</li>
+    <li data-step="review"><span>2</span>Review</li>
+    <li data-step="process"><span>3</span>Process</li>
+    <li data-step="download"><span>4</span>Download</li>
+  </ol>
+
+  <div id="global-alert" class="alert is-hidden" role="status" aria-live="polite"></div>
+
+  <section id="upload-panel" class="panel" aria-labelledby="upload-title">
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">NEW BATCH</p>
+        <h2 id="upload-title">Upload reports</h2>
+      </div>
+      <span class="status-chip status-neutral">PDF · MAX {{ max_batch_files }}</span>
+    </div>
+    <form id="upload-form">
+      <label id="drop-zone" class="drop-zone" for="pdf-files">
+        <span class="drop-icon" aria-hidden="true">⇧</span>
+        <strong>Drop report PDFs here</strong>
+        <span>or choose files from your computer</span>
+        <input id="pdf-files" name="files" type="file" accept="application/pdf,.pdf" multiple>
+      </label>
+      <div id="selected-files" class="selected-files" aria-live="polite"></div>
+      <div class="batch-controls">
+        <fieldset>
+          <legend>Laboratory source</legend>
+          <label class="choice-card">
+            <input type="radio" name="lab_source" value="EUROFINS" checked>
+            <span><strong>Eurofins</strong><small>Eurofins DNA reports.</small></span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="lab_source" value="UFC">
+            <span><strong>UFC</strong><small>Universal Forensics reports.</small></span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="lab_source" value="HONG_KONG">
+            <span><strong>Hong Kong Lab</strong><small>Prenatal DNA reports (password only).</small></span>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Operating mode</legend>
+          <label class="choice-card">
+            <input type="radio" name="review_mode" value="REVIEW">
+            <span><strong>Review</strong><small>Confirm every extracted report.</small></span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="review_mode" value="AUTO_APPROVE">
+            <span><strong>Auto Approve</strong><small>Process clean files; quarantine exceptions.</small></span>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Default report type</legend>
+          <label class="choice-card">
+            <input type="radio" name="default_case_type" value="PERSONAL" checked>
+            <span><strong>Personal</strong><small>Edited laboratory report only.</small></span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="default_case_type" value="CERTIFIED_LEGAL">
+            <span><strong>Certified / Legal</strong><small>Add verification pages first.</small></span>
+          </label>
+        </fieldset>
+      </div>
+      <div class="panel-actions">
+        <p>Only text-native PDF reports are supported.</p>
+        <button id="upload-button" class="button button-primary" type="submit">Extract reports</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="job-panel" class="panel is-hidden" aria-labelledby="job-title">
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">ACTIVE BATCH</p>
+        <h2 id="job-title">Review extracted details</h2>
+      </div>
+      <span id="job-state" class="status-chip status-neutral">AWAITING REVIEW</span>
+    </div>
+
+    <div id="processing-summary" class="processing-summary is-hidden">
+      <div class="progress-copy"><strong id="progress-label">Processing reports</strong><span id="progress-value">0%</span></div>
+      <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+    </div>
+
+    <div class="review-layout">
+      <nav id="file-rail" class="file-rail" aria-label="Reports in this batch"></nav>
+      <div id="review-detail" class="review-detail">
+        <div class="empty-state"><strong>Select a report</strong><span>Extracted details will appear here.</span></div>
+      </div>
+    </div>
+
+    <div class="panel-actions">
+      <p id="batch-expiry">Files expire one hour after upload.</p>
+      <div class="button-row">
+        <button id="new-batch-button" class="button button-secondary" type="button">New batch</button>
+        <button id="process-button" class="button button-primary" type="button" disabled>Process approved</button>
+        <a id="download-button" class="button button-success is-hidden" href="#">Download ZIP</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings-dialog" class="settings-dialog">
+  <form method="dialog" class="dialog-card">
+    <div class="dialog-heading">
+      <div><p class="eyebrow">TEAM SETTINGS</p><h2>Default operating mode</h2></div>
+      <button class="icon-button" value="cancel" aria-label="Close settings">×</button>
+    </div>
+    <p>This default applies to new batches and can be changed during upload.</p>
+    <label class="choice-card">
+      <input type="radio" name="settings_review_mode" value="REVIEW">
+      <span><strong>Review</strong><small>Require confirmation for every report.</small></span>
+    </label>
+    <label class="choice-card">
+      <input type="radio" name="settings_review_mode" value="AUTO_APPROVE">
+      <span><strong>Auto Approve</strong><small>Process only high-confidence reports automatically.</small></span>
+    </label>
+    <dl class="rules-list">
+      <div><dt>Source</dt><dd>Eurofins &amp; UFC</dd></div>
+      <div><dt>Retention</dt><dd>One hour</dd></div>
+      <div><dt>Sample type</dt><dd>BUCCAL SWAB</dd></div>
+    </dl>
+    <div class="dialog-actions">
+      <button class="button button-secondary" value="cancel">Cancel</button>
+      <button id="save-settings" class="button button-primary" type="button">Save setting</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/app.js') }}" defer></script>{% endblock %}

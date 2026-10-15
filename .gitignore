@@ -5,8 +5,17 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+**/.venv/
+**/venv/
 .DS_Store
 *.xlsx
 *.docx
+!verification page template.docx
+!verification page template.dotx
+*.pdf
 .pytest_cache/
 .vscode/
+data/
+report_bot_data/
+Project Report Bot/
+

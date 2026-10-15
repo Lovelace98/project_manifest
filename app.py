@@ -1,233 +1,898 @@
+from __future__ import annotations
+
 import os
 import io
+import time
+import secrets
+import asyncio
+import hashlib
+import logging
 import tempfile
-import webbrowser
-import threading
-from datetime import timedelta
-from flask import Flask, request, jsonify, send_file, render_template, session, redirect, url_for, send_from_directory
-from werkzeug.middleware.proxy_fix import ProxyFix
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime
+from pathlib import Path
+from typing import Annotated, Any
+
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 
-from parser import parse_docx
+# Manifest modules (100% untouched business logic)
 from exporter import create_excel_manifest
-from notion_service import fetch_manifest_cases, update_case_status_in_notion
-from auth import login_required, verify_credentials, is_rate_limited
+from notion_service import (
+    fetch_manifest_cases,
+    update_case_status_in_notion,
+    update_cases_by_codes,
+)
+from auth import verify_credentials, is_rate_limited, new_csrf_token, clear_rate_limits
+
+# Report Bot modules (100% untouched business logic)
+from report_bot.config import BASE_DIR, Settings, get_settings
+from report_bot.domain import (
+    AppPreferences,
+    CaseType,
+    ItemState,
+    ItemUpdate,
+    JobItem,
+    JobRecord,
+    JobState,
+    LabSource,
+    Participant,
+    ReportData,
+    ReviewMode,
+)
+from report_bot.images import transparent_logo_png
+from report_bot.ordering import (
+    has_expected_primary_role,
+    order_participants,
+    role_combination_warnings,
+)
+from report_bot.parser import (
+    CASE_RE,
+    valid_date_of_birth,
+)
+from report_bot.parsing import (
+    ReportParseError,
+    parse_report,
+)
+from report_bot.pipeline import ReportPipeline
+from report_bot.preferences import PreferencesStore
+from report_bot.store import JobNotFoundError, JobStore
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-app = Flask(
-    __name__,
-    template_folder="templates",
-    static_folder="static"
-)
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-# App security & session configuration
-app.secret_key = os.getenv('SECRET_KEY', 'default-dev-secret-key-manifest-2026')
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=int(os.getenv('SESSION_TTL_HOURS', 12)))
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-if os.getenv('SESSION_COOKIE_SECURE', 'false').lower() in ('true', '1', 'yes'):
-    app.config['SESSION_COOKIE_SECURE'] = True
+def _settings(request: Request) -> Settings:
+    return request.app.state.settings
 
-# Trust Traefik / reverse proxy headers in Dokploy (Hostinger VPS)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+def _require_api(request: Request) -> None:
+    session = request.session
+    if not session.get("authenticated"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please log in.",
+        )
 
-# Set max upload size to 16MB
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+def _require_mutation(request: Request) -> None:
+    _require_api(request)
+    # Check CSRF token for mutating Report Bot requests
+    expected = str(request.session.get("csrf_token", ""))
+    supplied = request.headers.get("x-csrf-token", "") or request.headers.get("X-CSRF-Token", "")
+    if expected and supplied and not secrets.compare_digest(expected, supplied):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
 
-@app.route('/health')
-def health():
-    """Health check endpoint for container monitoring and Dokploy VPS."""
-    return jsonify({'status': 'healthy', 'service': 'blueprint-manifest'}), 200
+def _get_job(request: Request, job_id: str) -> JobRecord:
+    try:
+        return request.app.state.job_store.get(job_id)
+    except (JobNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Job not found or expired") from exc
 
-@app.route('/favicon.ico')
-def favicon():
-    """Direct root favicon route for browsers and web crawlers."""
-    return send_from_directory(
-        os.path.join(app.root_path, 'static', 'img'),
-        'favicon.ico',
-        mimetype='image/vnd.microsoft.icon'
+def _public_participant(participant: Participant) -> dict[str, Any]:
+    return participant.model_dump(mode="json")
+
+def _public_report(report: ReportData) -> dict[str, Any]:
+    payload = report.model_dump(mode="json", exclude={"participants"})
+    payload["participants"] = [
+        _public_participant(participant)
+        for participant in order_participants(report.test_type, report.participants)
+    ]
+    return payload
+
+def _public_item(item: JobItem) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "original_filename": item.original_filename,
+        "case_type": item.case_type.value,
+        "state": item.state.value,
+        "report": _public_report(item.report) if item.report else None,
+        "parse_error": item.parse_error,
+        "approved": item.approved,
+        "output_filename": item.output_filename,
+        "processing_error": item.processing_error,
+    }
+
+def _public_job(job: JobRecord) -> dict[str, Any]:
+    return {
+        "id": job.id,
+        "lab_source": job.lab_source.value,
+        "review_mode": job.review_mode.value,
+        "default_case_type": job.default_case_type.value,
+        "state": job.state.value,
+        "created_at": job.created_at.isoformat(),
+        "updated_at": job.updated_at.isoformat(),
+        "expires_at": job.expires_at.isoformat(),
+        "progress": job.progress,
+        "download_ready": bool(job.zip_path and job.zip_path.exists()),
+        "items": [_public_item(item) for item in job.items],
+    }
+
+def _validation_errors(report: ReportData) -> list[str]:
+    errors: list[str] = []
+    if not CASE_RE.fullmatch(report.case_code):
+        errors.append("Case reference must match [PREFIX]-...-DDMMYY-NN")
+    else:
+        date_segment = report.case_code.split("-")[-2]
+        try:
+            expected_date = datetime.strptime(date_segment, "%d%m%y").date()
+        except ValueError:
+            errors.append("Case reference contains an invalid collection date")
+        else:
+            if report.collection_date != expected_date:
+                errors.append("Collection date must match the case reference")
+
+    if not report.test_type.strip():
+        errors.append("Test type is required")
+    min_participants = 1 if any(t in report.test_type.upper() for t in ("GENDER", "SEX")) else 2
+    if len(report.participants) < min_participants:
+        errors.append(
+            f"At least {min_participants} participant{'s are' if min_participants > 1 else ' is'} required"
+        )
+    if len({participant.id for participant in report.participants}) != len(report.participants):
+        errors.append("Participant identifiers must be unique")
+    samples = [participant.sample_number for participant in report.participants]
+    if len(set(samples)) != len(samples):
+        errors.append("Participant sample numbers must be unique")
+    if any(
+        not participant.role or not participant.full_name
+        for participant in report.participants
+    ):
+        errors.append("Every participant requires a role and full name")
+    if any(
+        not valid_date_of_birth(participant.date_of_birth)
+        for participant in report.participants
+    ):
+        errors.append("Dates of birth must be valid and use DD/MM/YYYY, --/--/YYYY, or -")
+    if not has_expected_primary_role(report.test_type, report.participants):
+        errors.append("Expected primary tested adult role was not found")
+    return errors
+
+def _duplicate_case_warnings(job: JobRecord) -> None:
+    case_items: dict[str, list[JobItem]] = {}
+    for item in job.items:
+        if item.report:
+            case_items.setdefault(item.report.case_code, []).append(item)
+    for items in case_items.values():
+        if len(items) < 2:
+            continue
+        for item in items:
+            message = "Shared case reference in this batch (outputs will be numbered with _1, _2)"
+            if message not in item.report.warnings:
+                item.report.warnings.append(message)
+
+def _find_item(job: JobRecord, item_id: str) -> JobItem:
+    item = next((candidate for candidate in job.items if candidate.id == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Report item not found")
+    return item
+
+def _schedule_processing(app: FastAPI, job_id: str) -> None:
+    async def run() -> None:
+        try:
+            async with app.state.processing_semaphore:
+                await asyncio.to_thread(
+                    app.state.pipeline.process_job,
+                    job_id,
+                    app.state.job_store,
+                )
+        except Exception:
+            logger.exception("Background job failed", extra={"job_id": job_id})
+            with suppress(JobNotFoundError):
+                job = app.state.job_store.get(job_id)
+                job.state = JobState.FAILED
+                app.state.job_store.save(job)
+
+    task = asyncio.create_task(run(), name=f"report-job-{job_id}")
+    app.state.processing_tasks.add(task)
+    task.add_done_callback(app.state.processing_tasks.discard)
+
+async def _cleanup_loop(app: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(app.state.settings.cleanup_interval_seconds)
+        removed = await asyncio.to_thread(app.state.job_store.cleanup_expired)
+        if removed:
+            logger.info("Expired report jobs purged", extra={"count": removed})
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    application_settings = settings or get_settings()
+    application_settings.ensure_directories()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.job_store.purge_orphans()
+        cleanup_task = asyncio.create_task(_cleanup_loop(app), name="job-cleanup")
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+            tasks = list(app.state.processing_tasks)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    app = FastAPI(
+        title="Blueprint DNA Operations Super App",
+        version="2.0.0",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
     )
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if session.get('authenticated'):
-        return redirect(url_for('index'))
-        
-    error = None
-    next_url = request.args.get('next') or request.form.get('next') or url_for('index')
-    
-    if request.method == 'POST':
-        ip = request.remote_addr or '127.0.0.1'
-        if is_rate_limited(ip, 'login', limit=5, window_seconds=60):
-            return render_template(
-                'login.html',
-                error="Too many login attempts. Please wait 1 minute before trying again.",
-                next_url=next_url
-            ), 429
-            
-        username = request.form.get('username', '')
-        password = request.form.get('password', '')
-        
-        if verify_credentials(username, password):
-            session.permanent = True
-            session['authenticated'] = True
-            session['user'] = username
-            return redirect(next_url)
+    app.state.settings = application_settings
+    app.state.job_store = JobStore(
+        application_settings.job_dir,
+        application_settings.job_ttl_seconds,
+    )
+    app.state.preferences = PreferencesStore(application_settings.settings_path)
+    app.state.pipeline = ReportPipeline(application_settings)
+    app.state.processing_tasks = set()
+    app.state.processing_semaphore = asyncio.Semaphore(1)
+
+    # Unified session configuration
+    session_secret = os.getenv("SECRET_KEY") or application_settings.session_secret
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=session_secret,
+        session_cookie="blueprint_session",
+        max_age=application_settings.session_absolute_seconds,
+        same_site="lax",
+        https_only=application_settings.secure_cookies,
+    )
+
+    # Static assets
+    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+    # Security Headers Middleware
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    # Global Exception Handlers
+    @app.exception_handler(JobNotFoundError)
+    async def missing_job_handler(_request: Request, _exc: JobNotFoundError):
+        return JSONResponse(status_code=404, content={"detail": "Job not found or expired"})
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_request: Request, exc: HTTPException):
+        # Format errors as { "error": msg } for Manifest API callers or { "detail": msg }
+        detail = exc.detail
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": detail, "detail": detail},
+        )
+
+    # Health & System Checks
+    @app.get("/health", include_in_schema=False)
+    async def health():
+        return {"status": "healthy", "service": "blueprint-operations-hub"}
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        favicon_path = BASE_DIR / "static" / "img" / "favicon.ico"
+        if favicon_path.exists():
+            return FileResponse(favicon_path, media_type="image/vnd.microsoft.icon")
+        raise HTTPException(status_code=404, detail="Favicon not found")
+
+    @app.get("/brand/logo", include_in_schema=False)
+    async def brand_logo():
+        logo_path = BASE_DIR / "blueprint_logo.png"
+        if not logo_path.exists():
+            logo_path = BASE_DIR / "static" / "img" / "blueprint_logo.png"
+        if not logo_path.exists():
+            raise HTTPException(status_code=404, detail="Logo unavailable")
+        return Response(
+            content=transparent_logo_png(logo_path),
+            media_type="image/png",
+        )
+
+    # =========================================================================
+    # AUTHENTICATION
+    # =========================================================================
+
+    @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+    async def login_page(request: Request):
+        if request.session.get("authenticated"):
+            return RedirectResponse(url="/", status_code=303)
+        csrf_token = request.session.get("csrf_token") or new_csrf_token()
+        request.session["csrf_token"] = csrf_token
+        next_url = request.query_params.get("next") or "/"
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"csrf_token": csrf_token, "error": None, "next_url": next_url},
+        )
+
+    @app.post("/login", response_class=HTMLResponse, include_in_schema=False)
+    async def login_submit(
+        request: Request,
+        username: Annotated[str, Form()] = "admin",
+        password: Annotated[str, Form()] = "",
+        next: Annotated[str, Form()] = "/",
+        csrf_token: Annotated[str, Form()] = "",
+    ):
+        ip = request.client.host if request.client else "127.0.0.1"
+        if is_rate_limited(ip, "login", limit=5, window_seconds=60):
+            return templates.TemplateResponse(
+                request=request,
+                name="login.html",
+                context={
+                    "csrf_token": csrf_token,
+                    "error": "Too many login attempts. Please wait 1 minute before trying again.",
+                    "next_url": next,
+                },
+                status_code=429,
+            )
+
+        if verify_credentials(username, password, application_settings):
+            request.session.clear()
+            request.session["authenticated"] = True
+            request.session["user"] = username
+            request.session["csrf_token"] = new_csrf_token()
+            request.session["issued_at"] = int(time.time())
+            request.session["last_seen"] = int(time.time())
+            target_url = next if next and next.startswith("/") else "/"
+            return RedirectResponse(url=target_url, status_code=303)
         else:
-            error = "Invalid username or password."
-            
-    return render_template('login.html', error=error, next_url=next_url)
+            return templates.TemplateResponse(
+                request=request,
+                name="login.html",
+                context={
+                    "csrf_token": new_csrf_token(),
+                    "error": "Invalid username or password.",
+                    "next_url": next,
+                },
+                status_code=401,
+            )
 
-@app.route('/logout', methods=['GET', 'POST'])
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
+    @app.get("/logout", include_in_schema=False)
+    @app.post("/logout", include_in_schema=False)
+    async def logout_submit(request: Request):
+        request.session.clear()
+        return RedirectResponse(url="/login", status_code=303)
 
-@app.route('/')
-@login_required
-def index():
-    return render_template('index.html', user=session.get('user', 'Admin'))
+    # =========================================================================
+    # SUPER APP UNIFIED WORKSPACE
+    # =========================================================================
 
-@app.route('/api/parse', methods=['POST'])
-@login_required
-def api_parse():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/manifest", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/reports", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
+    async def hub_workspace(request: Request):
+        if not request.session.get("authenticated"):
+            return RedirectResponse(url=f"/login?next={request.url.path}", status_code=303)
         
-    uploaded_file = request.files['file']
-    if uploaded_file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-        
-    if not uploaded_file.filename.lower().endswith('.docx'):
-        return jsonify({'error': 'File must be in DOCX format'}), 400
-        
-    try:
-        file_stream = io.BytesIO(uploaded_file.read())
-        result = parse_docx(file_stream)
-        cases = result.get('cases', [])
-        docx_rows = result.get('row_count', 0)
-        return jsonify({'cases': cases, 'docx_rows': docx_rows, 'parsed_rows': len(cases)})
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Failed to parse DOCX: {str(e)}'}), 500
+        csrf_token = request.session.get("csrf_token")
+        if not csrf_token:
+            csrf_token = new_csrf_token()
+            request.session["csrf_token"] = csrf_token
 
-@app.route('/api/notion/status', methods=['GET'])
-@login_required
-def api_notion_status():
-    has_key = bool(os.getenv('NOTION_API_KEY') or os.getenv('NOTION_TOKEN'))
-    has_db = bool(os.getenv('NOTION_DATABASE_ID') or os.getenv('NOTION_PARTICIPANT_DB_ID') or os.getenv('NOTION_CASES_DB_ID'))
-    return jsonify({
-        'configured': has_key and has_db,
-        'has_api_key': has_key,
-        'has_database_id': has_db
-    })
-
-@app.route('/api/notion/fetch', methods=['GET', 'POST'])
-@login_required
-def api_notion_fetch():
-    req_data = request.get_json(silent=True) or {}
-    lab_filter = req_data.get('lab') or request.args.get('lab')
-    filter_mode = req_data.get('filter_mode') or request.args.get('filter_mode') or 'manifest_batch'
-    force_refresh = req_data.get('force_refresh', False) or request.args.get('force', '').lower() == 'true'
-    
-    ip = request.remote_addr or '127.0.0.1'
-    if is_rate_limited(ip, 'notion_fetch', limit=20, window_seconds=60):
-        return jsonify({'error': 'Request limit exceeded. Please wait a moment.'}), 429
-
-    try:
-        result = fetch_manifest_cases(
-            filter_mode=filter_mode,
-            lab_filter=lab_filter,
-            force_refresh=force_refresh
+        lo_available = bool(
+            getattr(app.state.pipeline, "converter", None)
+            and app.state.pipeline.converter.available
         )
-        return jsonify(result)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Failed to fetch from Notion: {str(e)}'}), 500
+        has_key = bool(os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN"))
+        has_db = bool(
+            os.getenv("NOTION_DATABASE_ID")
+            or os.getenv("NOTION_PARTICIPANT_DB_ID")
+            or os.getenv("NOTION_CASES_DB_ID")
+        )
+        notion_ready = has_key and has_db
 
-@app.route('/api/export', methods=['POST'])
-@login_required
-def api_export():
-    data = request.get_json()
-    if not data or 'cases' not in data:
-        return jsonify({'error': 'Missing cases data'}), 400
-        
-    cases = data['cases']
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
-            tmp_path = tmp.name
-            
+        preferences = app.state.preferences.read()
+        return templates.TemplateResponse(
+            request=request,
+            name="hub.html",
+            context={
+                "user": request.session.get("user", "Admin"),
+                "csrf_token": csrf_token,
+                "default_review_mode": preferences.default_review_mode.value,
+                "max_batch_files": application_settings.max_batch_files,
+                "notion_ready": notion_ready,
+                "libreoffice_ready": lo_available,
+            },
+        )
+
+    # =========================================================================
+    # SYSTEM STATUS & MANIFEST API ENDPOINTS
+    # =========================================================================
+
+    @app.get("/api/system/status")
+    async def system_status(request: Request):
+        _require_api(request)
+        lo_available = bool(
+            getattr(app.state.pipeline, "converter", None)
+            and app.state.pipeline.converter.available
+        )
+        has_key = bool(os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN"))
+        has_db = bool(
+            os.getenv("NOTION_DATABASE_ID")
+            or os.getenv("NOTION_PARTICIPANT_DB_ID")
+            or os.getenv("NOTION_CASES_DB_ID")
+        )
+        notion_ready = has_key and has_db
+        return {
+            "notion": {
+                "status": "ready" if notion_ready else "issue",
+                "label": "Ready" if notion_ready else "Issue",
+                "configured": notion_ready,
+            },
+            "libreoffice": {
+                "status": "ready" if lo_available else "issue",
+                "label": "Ready" if lo_available else "Issue",
+                "available": lo_available,
+            },
+        }
+
+    @app.get("/api/notion/status")
+    async def notion_status(request: Request):
+        _require_api(request)
+        has_key = bool(os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN"))
+        has_db = bool(
+            os.getenv("NOTION_DATABASE_ID")
+            or os.getenv("NOTION_PARTICIPANT_DB_ID")
+            or os.getenv("NOTION_CASES_DB_ID")
+        )
+        return {
+            "configured": has_key and has_db,
+            "has_api_key": has_key,
+            "has_database_id": has_db,
+        }
+
+    @app.api_route("/api/notion/fetch", methods=["GET", "POST"])
+    async def notion_fetch(request: Request):
+        _require_api(request)
+        req_data = {}
+        if request.method == "POST":
+            with suppress(Exception):
+                req_data = await request.json()
+
+        lab_filter = req_data.get("lab") or request.query_params.get("lab")
+        filter_mode = req_data.get("filter_mode") or request.query_params.get("filter_mode") or "manifest_batch"
+        force_refresh = (
+            req_data.get("force_refresh", False)
+            or request.query_params.get("force", "").lower() == "true"
+        )
+
+        ip = request.client.host if request.client else "127.0.0.1"
+        if is_rate_limited(ip, "notion_fetch", limit=20, window_seconds=60):
+            return JSONResponse({"error": "Request limit exceeded. Please wait a moment."}, status_code=429)
+
         try:
-            create_excel_manifest(cases, tmp_path)
-            with open(tmp_path, 'rb') as f:
-                excel_bytes = f.read()
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-                
-        return send_file(
-            io.BytesIO(excel_bytes),
-            as_attachment=True,
-            download_name="finalised_manifest.xlsx",
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            result = await asyncio.to_thread(
+                fetch_manifest_cases,
+                filter_mode=filter_mode,
+                lab_filter=lab_filter,
+                force_refresh=force_refresh,
+            )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.exception("Failed to fetch from Notion")
+            return JSONResponse({"error": f"Failed to fetch from Notion: {str(e)}"}, status_code=500)
+
+    @app.post("/api/notion/update-status")
+    async def notion_update_status(request: Request):
+        _require_api(request)
+        data = {}
+        with suppress(Exception):
+            data = await request.json()
+
+        case_page_ids = list(data.get("case_page_ids", []))
+        cases = data.get("cases", [])
+        target_status = data.get("target_status", "Dispatched to Laboratory")
+
+        if not case_page_ids and cases:
+            for c in cases:
+                for cid in c.get("case_page_ids", []):
+                    if cid and cid not in case_page_ids:
+                        case_page_ids.append(cid)
+
+        if not case_page_ids:
+            return {
+                "success": True,
+                "message": "No Notion case IDs provided to update.",
+                "total": 0,
+                "updated": 0,
+                "failed": 0,
+                "failed_cases": [],
+            }
+
+        ip = request.client.host if request.client else "127.0.0.1"
+        if is_rate_limited(ip, "notion_update_status", limit=30, window_seconds=60):
+            return JSONResponse({"error": "Update rate limit exceeded. Please wait a moment."}, status_code=429)
+
+        try:
+            result = await asyncio.to_thread(
+                update_case_status_in_notion,
+                case_page_ids=case_page_ids,
+                target_status=target_status,
+            )
+            return JSONResponse({"success": result.get("failed", 0) == 0, **result})
+        except Exception as e:
+            logger.exception("Failed to update Notion statuses")
+            return JSONResponse({"error": f"Failed to update Notion statuses: {str(e)}"}, status_code=500)
+
+    @app.post("/api/export")
+    async def manifest_export(request: Request):
+        _require_api(request)
+        data = await request.json()
+        if not data or "cases" not in data:
+            return JSONResponse({"error": "Missing cases data"}, status_code=400)
+
+        cases = data["cases"]
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            try:
+                await asyncio.to_thread(create_excel_manifest, cases, tmp_path)
+                with open(tmp_path, "rb") as f:
+                    excel_bytes = f.read()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+            return Response(
+                content=excel_bytes,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": 'attachment; filename="finalised_manifest.xlsx"'},
+            )
+        except Exception as e:
+            logger.exception("Failed to generate Excel")
+            return JSONResponse({"error": f"Failed to generate Excel: {str(e)}"}, status_code=500)
+
+    @app.post("/api/parse")
+    async def manifest_parse_docx(request: Request, file: UploadFile = File(...)):
+        _require_api(request)
+        if not file.filename.lower().endswith(".docx"):
+            return JSONResponse({"error": "File must be in DOCX format"}, status_code=400)
+
+        try:
+            content = await file.read()
+            file_stream = io.BytesIO(content)
+            result = await asyncio.to_thread(parse_docx, file_stream)
+            cases = result.get("cases", [])
+            docx_rows = result.get("row_count", 0)
+            return {"cases": cases, "docx_rows": docx_rows, "parsed_rows": len(cases)}
+        except Exception as e:
+            logger.exception("Failed to parse DOCX")
+            return JSONResponse({"error": f"Failed to parse DOCX: {str(e)}"}, status_code=500)
+
+    # =========================================================================
+    # REPORT BOT API ENDPOINTS (100% UNTOUCHED BUSINESS LOGIC)
+    # =========================================================================
+
+    @app.get("/api/settings")
+    async def get_preferences(request: Request):
+        _require_api(request)
+        return app.state.preferences.read().model_dump(mode="json")
+
+    @app.put("/api/settings")
+    async def set_preferences(request: Request, preferences: AppPreferences):
+        _require_mutation(request)
+        return app.state.preferences.write(preferences).model_dump(mode="json")
+
+    @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
+    async def create_job(
+        request: Request,
+        files: Annotated[list[UploadFile], File()],
+        review_mode: Annotated[ReviewMode, Form()],
+        default_case_type: Annotated[CaseType, Form()],
+        lab_source: Annotated[LabSource, Form()] = LabSource.EUROFINS,
+        case_types: Annotated[list[CaseType] | None, Form()] = None,
+    ):
+        _require_mutation(request)
+        if not files or len(files) > application_settings.max_batch_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload between 1 and {application_settings.max_batch_files} PDF files",
+            )
+        if case_types is not None and len(case_types) != len(files):
+            raise HTTPException(
+                status_code=400,
+                detail="Every uploaded PDF must have one report type",
+            )
+
+        job = JobRecord(
+            lab_source=lab_source,
+            review_mode=review_mode,
+            default_case_type=default_case_type,
+            expires_at=app.state.job_store.new_expiry(),
         )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Failed to generate Excel: {str(e)}'}), 500
+        app.state.job_store.create(job)
+        job_dir = app.state.job_store.job_directory(job.id)
+        total_bytes = 0
+        seen_digests: set[str] = set()
 
-@app.route('/api/notion/update-status', methods=['POST'])
-@login_required
-def api_notion_update_status():
-    data = request.get_json(silent=True) or {}
-    case_page_ids = list(data.get('case_page_ids', []))
-    cases = data.get('cases', [])
-    target_status = data.get('target_status', 'Dispatched to Laboratory')
-    
-    # If cases array is provided, extract case_page_ids from cases
-    if not case_page_ids and cases:
-        for c in cases:
-            for cid in c.get('case_page_ids', []):
-                if cid and cid not in case_page_ids:
-                    case_page_ids.append(cid)
+        try:
+            for file_index, upload in enumerate(files):
+                browser_filename = (upload.filename or "report.pdf").replace("\\", "/")
+                original_filename = Path(browser_filename).name
+                item_case_type = (
+                    case_types[file_index] if case_types is not None else default_case_type
+                )
+                item = JobItem(
+                    original_filename=original_filename,
+                    stored_filename="",
+                    source_path=job_dir,
+                    case_type=item_case_type,
+                )
+                job.items.append(item)
+                try:
+                    if len(original_filename) > 255:
+                        raise ReportParseError("Filename exceeds the supported length")
+                    if Path(original_filename).suffix.lower() != ".pdf":
+                        raise ReportParseError("Only PDF files are supported")
+                    content = await upload.read(application_settings.max_file_bytes + 1)
+                    total_bytes += len(content)
+                    if len(content) > application_settings.max_file_bytes:
+                        raise ReportParseError("PDF exceeds the 25 MB file limit")
+                    if total_bytes > application_settings.max_batch_bytes:
+                        raise ReportParseError("Batch exceeds the total upload size limit")
+                    digest = hashlib.sha256(content).hexdigest()
+                    if digest in seen_digests:
+                        raise ReportParseError("Duplicate PDF file in this batch")
+                    seen_digests.add(digest)
 
-    if not case_page_ids:
-        return jsonify({
-            'success': True,
-            'message': 'No Notion case IDs provided to update.',
-            'total': 0,
-            'updated': 0,
-            'failed': 0,
-            'failed_cases': []
-        }), 200
+                    item.stored_filename = f"source-{item.id}.pdf"
+                    item.source_path = job_dir / item.stored_filename
+                    item.source_path.write_bytes(content)
+                    item.source_path.chmod(0o600)
+                    item.report = parse_report(
+                        job.lab_source,
+                        content,
+                        original_filename,
+                        max_file_bytes=application_settings.max_file_bytes,
+                    )
+                    item.state = ItemState.NEEDS_REVIEW
+                except ReportParseError as exc:
+                    item.state = ItemState.FAILED
+                    item.parse_error = str(exc)
+                finally:
+                    await upload.close()
 
-    ip = request.remote_addr or '127.0.0.1'
-    if is_rate_limited(ip, 'notion_update_status', limit=30, window_seconds=60):
-        return jsonify({'error': 'Update rate limit exceeded. Please wait a moment.'}), 429
+            _duplicate_case_warnings(job)
+            if review_mode == ReviewMode.AUTO_APPROVE:
+                for item in job.items:
+                    has_shared_case = any(
+                        "Shared case reference" in w
+                        for w in (item.report.warnings if item.report else [])
+                    )
+                    if (
+                        item.report
+                        and item.state != ItemState.FAILED
+                        and not item.report.blocking_errors
+                        and not has_shared_case
+                        and item.report.confidence >= 0.9
+                    ):
+                        item.approved = True
+                        item.state = ItemState.APPROVED
+                if any(item.approved for item in job.items):
+                    job.state = JobState.READY
+                    app.state.job_store.save(job)
+                    _schedule_processing(app, job.id)
+                else:
+                    job.state = JobState.AWAITING_REVIEW
+                    app.state.job_store.save(job)
+            else:
+                job.state = JobState.AWAITING_REVIEW
+                app.state.job_store.save(job)
+            return _public_job(job)
+        except Exception:
+            if not job.items:
+                app.state.job_store.cleanup_expired()
+            raise
 
-    try:
-        result = update_case_status_in_notion(
-            case_page_ids=case_page_ids,
-            target_status=target_status
+    @app.get("/api/jobs/{job_id}")
+    async def get_job(request: Request, job_id: str):
+        _require_api(request)
+        return _public_job(_get_job(request, job_id))
+
+    @app.patch("/api/jobs/{job_id}/items/{item_id}")
+    async def update_item(request: Request, job_id: str, item_id: str, update: ItemUpdate):
+        _require_mutation(request)
+        job = _get_job(request, job_id)
+        if job.state == JobState.PROCESSING:
+            raise HTTPException(status_code=409, detail="Job is already processing")
+        item = _find_item(job, item_id)
+        if not item.report:
+            raise HTTPException(status_code=409, detail="This report could not be parsed")
+
+        participants: list[Participant] = []
+        for index, participant in enumerate(update.participants):
+            participant_id = participant.id
+            if not participant_id and index < len(item.report.participants):
+                participant_id = item.report.participants[index].id
+            participant_kwargs = {
+                "sample_number": participant.sample_number,
+                "role": participant.role,
+                "full_name": participant.full_name,
+                "date_of_birth": participant.date_of_birth,
+                "source_order": participant.source_order,
+            }
+            participants.append(
+                Participant(id=participant_id, **participant_kwargs)
+                if participant_id
+                else Participant(**participant_kwargs)
+            )
+        warnings = role_combination_warnings(update.test_type, participants)
+        if any(
+            participant.date_of_birth == "-" or participant.date_of_birth.startswith("--/--/")
+            for participant in participants
+        ):
+            warnings.append("One or more participants have no date of birth in the source report")
+        report = ReportData(
+            case_code=update.case_code,
+            collection_date=update.collection_date,
+            report_date=update.report_date,
+            test_type=update.test_type,
+            participants=participants,
+            warnings=warnings,
+            blocking_errors=[],
+            confidence=1.0,
         )
-        return jsonify({
-            'success': result['failed'] == 0,
-            **result
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Failed to update Notion statuses: {str(e)}'}), 500
+        report.blocking_errors = _validation_errors(report)
+        item.case_type = update.case_type
+        item.report = report
+        item.approved = False
+        item.state = ItemState.NEEDS_REVIEW
+        _duplicate_case_warnings(job)
+        app.state.job_store.save(job)
+        return _public_item(item)
+
+    @app.post("/api/jobs/{job_id}/items/{item_id}/approve")
+    async def approve_item(request: Request, job_id: str, item_id: str):
+        _require_mutation(request)
+        job = _get_job(request, job_id)
+        if job.state == JobState.PROCESSING:
+            raise HTTPException(status_code=409, detail="Job is already processing")
+        item = _find_item(job, item_id)
+        if not item.report:
+            raise HTTPException(status_code=409, detail="This report could not be parsed")
+        item.report.blocking_errors = _validation_errors(item.report)
+        _duplicate_case_warnings(job)
+        if item.report.blocking_errors:
+            item.approved = False
+            item.state = ItemState.NEEDS_REVIEW
+            app.state.job_store.save(job)
+            raise HTTPException(
+                status_code=422,
+                detail="Correct the blocking report errors before approval",
+            )
+        item.approved = True
+        item.state = ItemState.APPROVED
+        job.state = JobState.READY
+        app.state.job_store.save(job)
+        return _public_item(item)
+
+    @app.post("/api/jobs/{job_id}/process", status_code=status.HTTP_202_ACCEPTED)
+    async def process_job(request: Request, job_id: str):
+        _require_mutation(request)
+        job = _get_job(request, job_id)
+        if job.state == JobState.PROCESSING:
+            raise HTTPException(status_code=409, detail="Job is already processing")
+        if not any(item.approved and item.report for item in job.items):
+            raise HTTPException(status_code=422, detail="Approve at least one report first")
+        job.state = JobState.PROCESSING
+        app.state.job_store.save(job)
+        _schedule_processing(app, job.id)
+        return _public_job(job)
+
+    @app.get("/api/jobs/{job_id}/download")
+    async def download_job(request: Request, job_id: str):
+        _require_api(request)
+        job = _get_job(request, job_id)
+        if not job.zip_path or not job.zip_path.exists():
+            raise HTTPException(status_code=409, detail="Download is not ready")
+        return FileResponse(
+            job.zip_path,
+            media_type="application/zip",
+            filename="Blueprint-Reports.zip",
+        )
+
+    @app.post("/api/jobs/{job_id}/sync-notion-status")
+    async def sync_job_notion_status(request: Request, job_id: str):
+        _require_api(request)
+        job = _get_job(request, job_id)
+        # Collect case codes: prioritize completed items, fallback to any parsed items in batch
+        codes_to_sync = [
+            item.report.case_code.strip()
+            for item in job.items
+            if item.state == ItemState.COMPLETE and item.report and item.report.case_code and item.report.case_code.strip()
+        ]
+        if not codes_to_sync:
+            codes_to_sync = [
+                item.report.case_code.strip()
+                for item in job.items
+                if item.report and item.report.case_code and item.report.case_code.strip()
+            ]
+
+        if not codes_to_sync:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": "No case codes found in this batch to sync with Notion.",
+                    "total": 0,
+                    "updated": 0,
+                    "updated_count": 0,
+                    "failed": 0,
+                    "unmatched": 0,
+                    "target_status": "Result Review",
+                    "case_codes": [],
+                    "results": [],
+                    "unmatched_codes": [],
+                },
+                status_code=400,
+            )
+
+        try:
+            result = await asyncio.to_thread(
+                update_cases_by_codes,
+                case_codes=codes_to_sync,
+                target_status="Result Review",
+            )
+            updated_count = result.get("updated", 0)
+            return JSONResponse({
+                "job_id": job.id,
+                "success": result.get("failed", 0) == 0 and updated_count > 0,
+                "updated_count": updated_count,
+                "case_codes": codes_to_sync,
+                **result,
+            })
+        except Exception as e:
+            logger.exception("Failed to sync case statuses to Notion", extra={"job_id": job.id})
+            return JSONResponse(
+                {"error": f"Failed to sync with Notion: {str(e)}"},
+                status_code=500,
+            )
+
+    return app
+
+app = create_app()
 
 def start_server():
-    port = int(os.getenv('PORT', 5000))
-    app.run(host="127.0.0.1", port=port, debug=True)
+    import uvicorn
+    port = int(os.getenv("PORT", 5000))
+    uvicorn.run("app:app", host="127.0.0.1", port=port, reload=True)
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    if not os.environ.get("WERKZEUG_RUN_MAIN"):
-        threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+if __name__ == "__main__":
     start_server()

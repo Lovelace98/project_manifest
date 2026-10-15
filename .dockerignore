@@ -7,5 +7,14 @@ __pycache__/
 .git/
 *.xlsx
 *.docx
+!verification page template.docx
+!verification page template.dotx
+.venv/
+**/.venv/
+**/venv/
+*.pdf
 .DS_Store
+data/
+report_bot_data/
+Project Report Bot/
 tests/

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Blueprint Report Bot{% endblock %}
+{% block body_class %}login-page{% endblock %}
+{% block body %}
+<main class="login-shell">
+  <section class="login-card" aria-labelledby="login-title">
+    <img class="login-logo" src="/brand/logo" alt="Blueprint DNA Organization">
+    <div>
+      <p class="eyebrow">INTERNAL OPERATIONS</p>
+      <h1 id="login-title">Report workspace</h1>
+      <p class="lede">Process laboratory reports in a private, one-hour workspace.</p>
+    </div>
+    {% if error %}
+      <div class="alert alert-danger" role="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" class="stack-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="password">Team password</label>
+      <div class="password-control">
+        <input id="password" name="password" type="password" required autofocus autocomplete="current-password">
+        <button class="button button-quiet password-toggle" type="button" data-password-toggle aria-controls="password">Show</button>
+      </div>
+      <button class="button button-primary button-full" type="submit">Sign in</button>
+    </form>
+    <p class="privacy-note">Participant data stays in temporary private storage and is not written to a database.</p>
+  </section>
+</main>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/login.js') }}" defer></script>{% endblock %}

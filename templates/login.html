@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Blueprint DNA Manifest Portal</title>
+    <title>Sign In - Blueprint DNA Operations Hub</title>
     <!-- Favicon -->
-    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='img/favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='img/favicon-16x16.png') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/img/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/img/apple-touch-icon.png">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,20 +16,20 @@
     <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Main stylesheet -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+    <link rel="stylesheet" href="/static/css/index.css">
     <style>
         .login-wrapper {
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            background-color: var(--bg-dark);
+            background-color: #F8FAFC;
             padding: 1.5rem;
         }
 
         .login-card {
             background: #FFFFFF;
-            border: 1px solid var(--border-color);
+            border: 1px solid #E2E8F0;
             border-radius: 16px;
             box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
             width: 100%;
@@ -39,167 +39,163 @@
         }
 
         .login-logo {
-            max-width: 280px;
+            max-width: 260px;
             height: auto;
             margin-bottom: 1.5rem;
         }
 
         .login-title {
-            font-family: var(--font-header);
-            font-size: 1.4rem;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.45rem;
             font-weight: 700;
-            color: var(--text-main);
+            color: #0F172A;
             margin-bottom: 0.4rem;
         }
 
         .login-subtitle {
             font-size: 0.9rem;
-            color: var(--text-muted);
+            color: #64748B;
             margin-bottom: 1.75rem;
         }
 
         .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
             text-align: left;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #334155;
         }
 
         .input-group {
             position: relative;
-            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
         }
 
-        .input-group label {
-            display: block;
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: #0F172A;
-            margin-bottom: 0.4rem;
-        }
-
-        .input-icon-wrapper {
-            position: relative;
-        }
-
-        .input-icon-wrapper i {
+        .input-group i {
             position: absolute;
             left: 1rem;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #64748B;
+            color: #94A3B8;
             font-size: 0.95rem;
         }
 
-        .login-input {
+        .input-group input {
             width: 100%;
             padding: 0.75rem 1rem 0.75rem 2.6rem;
             font-size: 0.95rem;
+            font-family: inherit;
             color: #0F172A;
-            background: #FFFFFF;
-            border: 1.5px solid #94A3B8;
-            border-radius: 8px;
+            background: #F8FAFC;
+            border: 1.5px solid #E2E8F0;
+            border-radius: 10px;
+            transition: all 0.2s ease;
+        }
+
+        .input-group input:focus {
             outline: none;
-            transition: var(--transition-smooth);
-            font-family: var(--font-body);
+            background: #FFFFFF;
+            border-color: #0284C7;
+            box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
         }
 
-        .login-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2);
-        }
-
-        .login-btn {
+        .btn-submit {
             width: 100%;
-            padding: 0.85rem 1.25rem;
+            padding: 0.85rem;
             font-size: 1rem;
             font-weight: 600;
+            font-family: inherit;
             color: #FFFFFF;
-            background: var(--primary);
+            background: #0284C7;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.6rem;
-            transition: var(--transition-smooth);
-            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
-            margin-top: 1.5rem;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            transition: all 0.2s ease;
         }
 
-        .login-btn:hover {
-            background: var(--primary-hover);
-            box-shadow: 0 6px 16px rgba(2, 132, 199, 0.35);
+        .btn-submit:hover {
+            background: #0369A1;
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
         }
 
-        .alert-banner {
-            background-color: #FEF2F2;
-            border: 1.5px solid #EF4444;
-            border-left: 5px solid #B91C1C;
-            color: #7F1D1D;
-            padding: 0.85rem 1rem;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 600;
+        .error-alert {
+            background: #FEF2F2;
+            border: 1px solid #FCA5A5;
+            color: #DC2626;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-bottom: 1.25rem;
             display: flex;
             align-items: center;
-            gap: 0.65rem;
-            margin-bottom: 1.25rem;
+            gap: 0.5rem;
             text-align: left;
-        }
-
-        .alert-banner i {
-            color: #B91C1C;
-            font-size: 1.15rem;
         }
 
         .login-footer {
             margin-top: 2rem;
-            font-size: 0.78rem;
+            font-size: 0.75rem;
             color: #94A3B8;
-            border-top: 1px solid #F1F5F9;
-            padding-top: 1.25rem;
         }
     </style>
 </head>
 <body>
     <div class="login-wrapper">
         <div class="login-card">
-            <img src="{{ url_for('static', filename='img/blueprint_logo.png') }}" alt="Blueprint DNA Organization" class="login-logo">
-            <h2 class="login-title">Manifest Portal</h2>
-            <p class="login-subtitle">Sign in to access and export DNA participant manifests</p>
+            <img src="/brand/logo" alt="Blueprint DNA Organization" class="login-logo">
+            <h1 class="login-title">Operations Hub</h1>
+            <p class="login-subtitle">Sign in to access Manifest Portal &amp; Report Bot</p>
 
             {% if error %}
-            <div class="alert-banner">
-                <i class="fa-solid fa-circle-exclamation"></i>
+            <div class="error-alert">
+                <i class="fa-solid fa-triangle-exclamation"></i>
                 <span>{{ error }}</span>
             </div>
             {% endif %}
 
-            <form method="POST" action="/login" class="login-form">
-                <input type="hidden" name="next" value="{{ next_url or '' }}">
-                
-                <div class="input-group">
+            <form action="/login" method="POST" class="login-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
+                <input type="hidden" name="next" value="{{ next_url or '/' }}">
+
+                <div class="form-group">
                     <label for="username">Username</label>
-                    <div class="input-icon-wrapper">
+                    <div class="input-group">
                         <i class="fa-solid fa-user"></i>
-                        <input type="text" id="username" name="username" class="login-input" placeholder="Enter username" required autofocus autocomplete="username">
+                        <input type="text" id="username" name="username" placeholder="admin" value="admin" required autofocus>
                     </div>
                 </div>
 
-                <div class="input-group">
+                <div class="form-group">
                     <label for="password">Password</label>
-                    <div class="input-icon-wrapper">
+                    <div class="input-group">
                         <i class="fa-solid fa-lock"></i>
-                        <input type="password" id="password" name="password" class="login-input" placeholder="Enter password" required autocomplete="current-password">
+                        <input type="password" id="password" name="password" placeholder="Enter password" required>
                     </div>
                 </div>
 
-                <button type="submit" class="login-btn">
-                    <i class="fa-solid fa-right-to-bracket"></i> Sign In
+                <button type="submit" class="btn-submit">
+                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In
                 </button>
             </form>
 
             <div class="login-footer">
-                <i class="fa-solid fa-shield-halved"></i> Protected Session (12h TTL) · Internal Portal
+                &copy; 2026 Blueprint DNA Organization. Secured Internal Workspace.
             </div>
         </div>
     </div>

@@ -1,3 +1,6 @@
+(() => {
+"use strict";
+
 // State Management
 let allCases = [];
 let cases = [];
@@ -18,9 +21,9 @@ const labFilterSelect = document.getElementById('lab-filter-select');
 const autoDispatchLabel = document.getElementById('auto-dispatch-label');
 const autoDispatchCheckbox = document.getElementById('auto-dispatch-checkbox');
 
-// Upload Elements
-const dropZone = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
+// Upload Elements (Legacy Word parser only)
+const dropZone = document.getElementById('manifest-drop-zone') || document.getElementById('drop-zone-legacy');
+const fileInput = document.getElementById('manifest-file-input') || document.getElementById('file-input');
 
 // Editor Elements
 const casesGrid = document.getElementById('cases-grid');
@@ -38,9 +41,11 @@ const uploadAnotherBtn = document.getElementById('upload-another-btn');
  * Initialization & Notion Status
  * ------------------------------------------------------------- */
 
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkNotionStatus);
+} else {
     checkNotionStatus();
-});
+}
 
 function checkNotionStatus() {
     fetch('/api/notion/status')
@@ -137,7 +142,9 @@ function fetchNotionData(forceRefresh = false) {
     });
 }
 
-fetchNotionBtn.addEventListener('click', () => fetchNotionData(false));
+if (fetchNotionBtn) {
+    fetchNotionBtn.addEventListener('click', () => fetchNotionData(false));
+}
 if (forceFetchNotionBtn) {
     forceFetchNotionBtn.addEventListener('click', () => fetchNotionData(true));
 }
@@ -167,9 +174,11 @@ function populateLabDropdown(availableLabs) {
     currentLabFilter = 'ALL';
 }
 
-labFilterSelect.addEventListener('change', (e) => {
-    filterCasesByLab(e.target.value);
-});
+if (labFilterSelect) {
+    labFilterSelect.addEventListener('change', (e) => {
+        filterCasesByLab(e.target.value);
+    });
+}
 
 function filterCasesByLab(lab) {
     currentLabFilter = lab;
@@ -279,6 +288,7 @@ function handleFileSelect(file) {
  * Export to Excel Action
  * ------------------------------------------------------------- */
 
+if (exportExcelBtn) {
 exportExcelBtn.addEventListener('click', () => {
     if (cases.length === 0) {
         showToast('No case data to export', 'error');
@@ -387,14 +397,17 @@ exportExcelBtn.addEventListener('click', () => {
         updateStatus('Ready', 'fa-check');
     });
 });
+}
 
 /* -------------------------------------------------------------
  * UI Workspaces & Rendering
  * ------------------------------------------------------------- */
 
 function renderWorkspace() {
-    sourcePanel.style.display = 'none';
-    editorPanel.style.display = 'block';
+    const src = document.getElementById('source-panel') || sourcePanel;
+    const ed = document.getElementById('editor-panel') || editorPanel;
+    if (src) src.style.display = 'none';
+    if (ed) ed.style.display = 'block';
     
     renderCards();
     showLoader(false);
@@ -402,8 +415,10 @@ function renderWorkspace() {
 }
 
 function renderCards() {
-    casesGrid.innerHTML = '';
-    casesCountBadge.textContent = cases.length;
+    const grid = document.getElementById('cases-grid') || casesGrid;
+    const badge = document.getElementById('cases-count-badge') || casesCountBadge;
+    if (grid) grid.innerHTML = '';
+    if (badge) badge.textContent = cases.length;
 
     cases.forEach((caseItem, caseIdx) => {
         const card = document.createElement('div');
@@ -548,33 +563,37 @@ function renderCards() {
  * Event Handlers for Live Updating State
  * ------------------------------------------------------------- */
 
-window.updateCaseField = function(caseIdx, field, value) {
+function updateCaseField(caseIdx, field, value) {
     if (cases[caseIdx]) {
         cases[caseIdx][field] = value;
     }
-};
+}
+window.updateCaseField = updateCaseField;
 
-window.updateParticipantField = function(caseIdx, partIdx, field, value) {
+function updateParticipantField(caseIdx, partIdx, field, value) {
     if (cases[caseIdx] && cases[caseIdx].participants[partIdx]) {
         cases[caseIdx].participants[partIdx][field] = value;
     }
-};
+}
+window.updateParticipantField = updateParticipantField;
 
-window.deleteCase = function(caseIdx) {
+function deleteCase(caseIdx) {
     cases.splice(caseIdx, 1);
     renderCards();
     showToast('Case removed', 'info');
-};
+}
+window.deleteCase = deleteCase;
 
-window.removeParticipant = function(caseIdx, partIdx) {
+function removeParticipant(caseIdx, partIdx) {
     if (cases[caseIdx]) {
         cases[caseIdx].participants.splice(partIdx, 1);
         renderCards();
         showToast('Participant removed', 'info');
     }
-};
+}
+window.removeParticipant = removeParticipant;
 
-window.addParticipant = function(caseIdx) {
+function addParticipant(caseIdx) {
     if (cases[caseIdx]) {
         const testTypeUpper = (cases[caseIdx].test_type || '').toUpperCase();
         const numParts = cases[caseIdx].participants.length;
@@ -597,55 +616,70 @@ window.addParticipant = function(caseIdx) {
         renderCards();
         showToast('Participant added', 'success');
     }
-};
+}
+window.addParticipant = addParticipant;
 
-addCaseBtn.addEventListener('click', () => {
-    cases.push({
-        section: 'MAIN TABLE',
-        bdo_tag: `CD-BDO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-001`,
-        test_type: 'PRIVATE PATERNITY',
-        special_requests: 'None',
-        receiving_lab: currentLabFilter !== 'ALL' ? currentLabFilter : 'UNKNOWN',
-        is_multipart: false,
-        parts_merged: ['Part 1'],
-        participants: [
-            { name: '', dob: '', role: 'ALLEGED FATHER', ethnicity: 'AFRICAN' },
-            { name: '', dob: '', role: 'CHILD', ethnicity: 'AFRICAN' }
-        ]
+if (addCaseBtn) {
+    addCaseBtn.addEventListener('click', () => {
+        cases.push({
+            section: 'MAIN TABLE',
+            bdo_tag: `CD-BDO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-001`,
+            test_type: 'PRIVATE PATERNITY',
+            special_requests: 'None',
+            receiving_lab: currentLabFilter !== 'ALL' ? currentLabFilter : 'UNKNOWN',
+            is_multipart: false,
+            parts_merged: ['Part 1'],
+            participants: [
+                { name: '', dob: '', role: 'ALLEGED FATHER', ethnicity: 'AFRICAN' },
+                { name: '', dob: '', role: 'CHILD', ethnicity: 'AFRICAN' }
+            ]
+        });
+        renderCards();
+        showToast('Blank case appended to manifest', 'success');
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
-    renderCards();
-    showToast('Blank case appended to manifest', 'success');
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-});
+}
 
-uploadAnotherBtn.addEventListener('click', () => {
-    cases = [];
-    allCases = [];
-    if (fileInput) fileInput.value = '';
-    editorPanel.style.display = 'none';
-    sourcePanel.style.display = 'block';
-    updateStatus('Ready', 'fa-check');
-});
+if (uploadAnotherBtn) {
+    uploadAnotherBtn.addEventListener('click', () => {
+        cases = [];
+        allCases = [];
+        if (fileInput) fileInput.value = '';
+        if (editorPanel) editorPanel.style.display = 'none';
+        if (sourcePanel) sourcePanel.style.display = 'block';
+        updateStatus('Ready', 'fa-check');
+    });
+}
 
 /* -------------------------------------------------------------
  * Utility Helpers
  * ------------------------------------------------------------- */
 
 function showLoader(show, title = 'Processing data...', desc = 'Analyzing participants and formatting manifest records.') {
-    if (show) {
-        document.getElementById('loader-title').textContent = title;
-        document.getElementById('loader-desc').textContent = desc;
-        loadingOverlay.style.display = 'flex';
-    } else {
-        loadingOverlay.style.display = 'none';
-    }
+    const titleEl = document.getElementById('loader-title');
+    const descEl = document.getElementById('loader-desc');
+    const overlay = document.getElementById('loading-overlay') || loadingOverlay;
+    if (titleEl) titleEl.textContent = title;
+    if (descEl) descEl.textContent = desc;
+    if (overlay) overlay.style.display = show ? 'flex' : 'none';
 }
 
 function updateStatus(text, iconClass) {
-    statusBadge.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+    const badge = document.getElementById('status-badge') || statusBadge;
+    if (badge) {
+        badge.style.display = 'inline-flex';
+        badge.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+    }
 }
 
 function showToast(message, type = 'success') {
+    let container = document.getElementById('toast-container') || toastContainer;
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     
@@ -658,16 +692,16 @@ function showToast(message, type = 'success') {
         <div class="toast-content">${escapeHtml(message)}</div>
     `;
     
-    toastContainer.appendChild(toast);
+    container.appendChild(toast);
     
     setTimeout(() => {
         toast.classList.add('toast-fadeout');
         setTimeout(() => {
-            if (toastContainer.contains(toast)) {
-                toastContainer.removeChild(toast);
+            if (container && container.contains(toast)) {
+                container.removeChild(toast);
             }
-        }, 250);
-    }, 4000);
+        }, 300);
+    }, 4500);
 }
 
 function escapeHtml(text) {
@@ -679,3 +713,18 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
 }
+
+// Window exports for HTML event attributes and cross-script calls
+window.updateCaseField = updateCaseField;
+window.updateParticipantField = updateParticipantField;
+window.deleteCase = deleteCase;
+window.removeParticipant = removeParticipant;
+window.addParticipant = addParticipant;
+window.showToast = showToast;
+window.showLoader = showLoader;
+window.updateStatus = updateStatus;
+window.fetchNotionData = fetchNotionData;
+window.filterCasesByLab = filterCasesByLab;
+window.renderCards = renderCards;
+
+})();

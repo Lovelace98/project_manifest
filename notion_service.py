@@ -549,3 +549,156 @@ def update_case_status_in_notion(case_page_ids, target_status="Dispatched to Lab
     }
 
 
+def find_case_page_by_code(client, headers, case_code, cases_db_id=None, part_db_id=None):
+    """
+    Finds the Notion Case page ID corresponding to a given Case Code (e.g. CD-KBDO-021026-01).
+    Attempts:
+    1. Primary: Direct title query in the Cases database ('BDO CASES 2026').
+       Title format is typically '[Name] ([Case Code])'.
+    2. Fallback: Query Participant database by 'Case Code' property, then follow the 'Case' relation.
+    Also handles multi-report collision suffixes (e.g. 'SS-HOM-071026-01_1' -> 'SS-HOM-071026-01').
+    """
+    if not case_code:
+        return None
+
+    clean_code = case_code.strip()
+    base_code = re.sub(r"_\d+$", "", clean_code)
+    candidates = list(dict.fromkeys([clean_code, base_code]))
+
+    cases_db = cases_db_id or os.getenv("NOTION_CASES_DB_ID") or "382c226a-2e86-48f1-b70e-c4e9e8f62d1d"
+    part_db = part_db_id or os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PARTICIPANT_DB_ID")
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        # 1. Try querying Cases DB by title containing candidate
+        if cases_db:
+            url = f"{NOTION_BASE_URL}/databases/{cases_db}/query"
+            payload = {
+                "page_size": 5,
+                "filter": {
+                    "property": "title",
+                    "title": {
+                        "contains": candidate
+                    }
+                }
+            }
+            try:
+                resp = client.post(url, headers=headers, json=payload, timeout=20.0)
+                if resp.status_code == 200:
+                    results = resp.json().get("results", [])
+                    if results:
+                        return results[0].get("id")
+            except Exception:
+                pass
+
+        # 2. Fallback: Query Participant DB by Case Code rich_text
+        if part_db:
+            url = f"{NOTION_BASE_URL}/databases/{part_db}/query"
+            payload = {
+                "page_size": 5,
+                "filter": {
+                    "property": "Case Code",
+                    "rich_text": {
+                        "equals": candidate
+                    }
+                }
+            }
+            try:
+                resp = client.post(url, headers=headers, json=payload, timeout=20.0)
+                if resp.status_code == 200:
+                    results = resp.json().get("results", [])
+                    for page in results:
+                        case_rel = page.get("properties", {}).get("Case", {}).get("relation", [])
+                        if case_rel:
+                            return case_rel[0].get("id")
+            except Exception:
+                pass
+
+    return None
+
+
+def update_cases_by_codes(case_codes, target_status="Result Review", api_key=None, max_workers=3):
+    """
+    Takes a list of case codes (e.g. from converted PDF reports),
+    finds each case in Notion, updates its Status to target_status (default 'Result Review'),
+    and returns a summary of updated, failed, and unmatched case codes.
+    """
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
+    headers = get_notion_headers(token)
+
+    # Normalize status to match Notion select option exactly
+    if target_status.lower().replace(" ", "") in ["resultsreview", "resultreview"]:
+        normalized_status = "Result Review"
+    else:
+        normalized_status = target_status
+
+    # De-duplicate codes while preserving order
+    unique_codes = list(dict.fromkeys([code.strip() for code in case_codes if code and code.strip()]))
+    if not unique_codes:
+        return {
+            "total": 0,
+            "updated": 0,
+            "updated_count": 0,
+            "failed": 0,
+            "unmatched": 0,
+            "target_status": normalized_status,
+            "case_codes": [],
+            "results": [],
+            "failed_cases": [],
+            "unmatched_codes": []
+        }
+
+    cases_db = os.getenv("NOTION_CASES_DB_ID") or "382c226a-2e86-48f1-b70e-c4e9e8f62d1d"
+    part_db = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PARTICIPANT_DB_ID")
+
+    results = []
+    unmatched_codes = []
+    page_to_code = {}
+
+    with httpx.Client(timeout=30.0) as client:
+        # Step 1: Resolve case codes to Notion page IDs
+        for code in unique_codes:
+            page_id = find_case_page_by_code(client, headers, code, cases_db_id=cases_db, part_db_id=part_db)
+            if page_id:
+                page_to_code[page_id] = code
+            else:
+                unmatched_codes.append(code)
+
+        # Step 2: Update resolved case pages in parallel
+        updated_count = 0
+        failed_cases = []
+
+        if page_to_code:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_page = {
+                    executor.submit(update_single_case_status, client, headers, page_id, normalized_status): page_id
+                    for page_id in page_to_code
+                }
+                for future in concurrent.futures.as_completed(future_to_page):
+                    page_id = future_to_page[future]
+                    code = page_to_code[page_id]
+                    res = future.result()
+                    is_success = res.get("success", False)
+                    if is_success:
+                        updated_count += 1
+                        results.append({"case_code": code, "page_id": page_id, "success": True})
+                    else:
+                        failed_cases.append({"case_code": code, "page_id": page_id, "error": res.get("error")})
+
+    clear_manifest_cache()
+
+    return {
+        "total": len(unique_codes),
+        "updated": updated_count,
+        "updated_count": updated_count,
+        "failed": len(failed_cases),
+        "unmatched": len(unmatched_codes),
+        "target_status": normalized_status,
+        "case_codes": unique_codes,
+        "results": results,
+        "failed_cases": failed_cases,
+        "unmatched_codes": unmatched_codes
+    }
+
+
