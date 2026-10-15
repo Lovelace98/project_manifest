@@ -83,16 +83,17 @@
             align-items: center;
         }
 
-        .input-group i {
+        .input-group .input-lead-icon {
             position: absolute;
             left: 1rem;
             color: #94A3B8;
             font-size: 0.95rem;
+            pointer-events: none;
         }
 
         .input-group input {
             width: 100%;
-            padding: 0.75rem 1rem 0.75rem 2.6rem;
+            padding: 0.75rem 2.75rem 0.75rem 2.6rem;
             font-size: 0.95rem;
             font-family: inherit;
             color: #0F172A;
@@ -100,6 +101,31 @@
             border: 1.5px solid #E2E8F0;
             border-radius: 10px;
             transition: all 0.2s ease;
+        }
+
+        .password-toggle-btn {
+            position: absolute;
+            right: 0.75rem;
+            background: transparent;
+            border: none;
+            padding: 0.4rem;
+            color: #94A3B8;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            border-radius: 6px;
+            transition: color 0.15s ease;
+        }
+
+        .password-toggle-btn:hover {
+            color: #0284C7;
+        }
+
+        .password-toggle-btn:focus-visible {
+            outline: 2px solid #0284C7;
+            outline-offset: 1px;
         }
 
         .input-group input:focus {
@@ -176,7 +202,7 @@
                 <div class="form-group">
                     <label for="username">Username</label>
                     <div class="input-group">
-                        <i class="fa-solid fa-user"></i>
+                        <i class="fa-solid fa-user input-lead-icon"></i>
                         <input type="text" id="username" name="username" placeholder="admin" value="admin" required autofocus>
                     </div>
                 </div>
@@ -184,8 +210,11 @@
                 <div class="form-group">
                     <label for="password">Password</label>
                     <div class="input-group">
-                        <i class="fa-solid fa-lock"></i>
+                        <i class="fa-solid fa-lock input-lead-icon"></i>
                         <input type="password" id="password" name="password" placeholder="Enter password" required>
+                        <button type="button" id="toggle-password" class="password-toggle-btn" aria-label="Show password" title="Show password">
+                            <i class="fa-solid fa-eye" id="toggle-password-icon"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -199,5 +228,22 @@
             </div>
         </div>
     </div>
+
+    <script>
+        const passwordInput = document.getElementById('password');
+        const toggleBtn = document.getElementById('toggle-password');
+        const toggleIcon = document.getElementById('toggle-password-icon');
+
+        if (toggleBtn && passwordInput && toggleIcon) {
+            toggleBtn.addEventListener('click', () => {
+                const isPassword = passwordInput.type === 'password';
+                passwordInput.type = isPassword ? 'text' : 'password';
+                toggleIcon.className = isPassword ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+                const label = isPassword ? 'Hide password' : 'Show password';
+                toggleBtn.setAttribute('aria-label', label);
+                toggleBtn.setAttribute('title', label);
+            });
+        }
+    </script>
 </body>
 </html>
