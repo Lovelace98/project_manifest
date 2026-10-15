@@ -512,25 +512,20 @@ if (newBatchBtn) {
 }
 
 const openSettingsBtn = document.querySelector("[data-open-settings]");
-if (openSettingsBtn && settingsDialog) {
-  openSettingsBtn.addEventListener("click", async () => {
-    try {
-      const response = await api("/api/settings");
-      const preferences = await response.json();
-      const radio = settingsDialog.querySelector(`input[value="${preferences.default_review_mode}"]`);
-      if (radio) radio.checked = true;
-      settingsDialog.showModal();
-    } catch (error) {
-      showAlert(error.message);
-    }
+if (openSettingsBtn) {
+  openSettingsBtn.addEventListener("click", () => {
+    const navBtnSettings = document.getElementById("nav-btn-settings");
+    if (navBtnSettings) navBtnSettings.click();
   });
 }
 
-const saveSettingsBtn = document.getElementById("save-settings");
-if (saveSettingsBtn && settingsDialog) {
-  saveSettingsBtn.addEventListener("click", async () => {
-    const selected = settingsDialog.querySelector('input[name="settings_review_mode"]:checked');
+const savePageSettingsBtn = document.getElementById("save-page-settings-btn");
+if (savePageSettingsBtn) {
+  savePageSettingsBtn.addEventListener("click", async () => {
+    const selected = document.querySelector('input[name="page_settings_review_mode"]:checked');
     if (!selected) return;
+    savePageSettingsBtn.disabled = true;
+    savePageSettingsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
     try {
       await api("/api/settings", {
         method: "PUT",
@@ -538,10 +533,21 @@ if (saveSettingsBtn && settingsDialog) {
       });
       const modeRadio = document.querySelector(`input[name="review_mode"][value="${selected.value}"]`);
       if (modeRadio) modeRadio.checked = true;
-      settingsDialog.close();
-      showAlert("Team default updated.", "success");
+      const indicator = document.getElementById("settings-save-indicator");
+      if (indicator) {
+        indicator.style.display = "inline-flex";
+        setTimeout(() => { indicator.style.display = "none"; }, 3000);
+      }
+      if (typeof window.showToast === "function") {
+        window.showToast("Default operating mode saved successfully.", "success");
+      }
     } catch (error) {
-      showAlert(error.message);
+      if (typeof window.showToast === "function") {
+        window.showToast(error.message || "Failed to save settings.", "error");
+      }
+    } finally {
+      savePageSettingsBtn.disabled = false;
+      savePageSettingsBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Default Mode';
     }
   });
 }

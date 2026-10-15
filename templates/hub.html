@@ -331,33 +331,6 @@
                         </section>
                     </main>
 
-                    <!-- Settings Dialog -->
-                    <dialog id="settings-dialog" class="settings-dialog">
-                        <form method="dialog" class="dialog-card">
-                            <div class="dialog-heading">
-                                <div><p class="eyebrow">TEAM SETTINGS</p><h2>Default operating mode</h2></div>
-                                <button class="icon-button" value="cancel" aria-label="Close settings">×</button>
-                            </div>
-                            <p>This default applies to new batches and can be changed during upload.</p>
-                            <label class="choice-card">
-                                <input type="radio" name="settings_review_mode" value="REVIEW">
-                                <span><strong>Review</strong><small>Require confirmation for every report.</small></span>
-                            </label>
-                            <label class="choice-card">
-                                <input type="radio" name="settings_review_mode" value="AUTO_APPROVE">
-                                <span><strong>Auto Approve</strong><small>Process only high-confidence reports automatically.</small></span>
-                            </label>
-                            <dl class="rules-list">
-                                <div><dt>Source</dt><dd>Eurofins<!-- &amp; UFC --></dd></div>
-                                <div><dt>Retention</dt><dd>One hour</dd></div>
-                                <div><dt>Sample type</dt><dd>BUCCAL SWAB</dd></div>
-                            </dl>
-                            <div class="dialog-actions">
-                                <button class="button button-secondary" value="cancel">Cancel</button>
-                                <button id="save-settings" class="button button-primary" type="button">Save setting</button>
-                            </div>
-                        </form>
-                    </dialog>
                 </section>
 
                 <!-- =========================================================
@@ -365,6 +338,60 @@
                      ========================================================= -->
                 <section id="panel-settings" class="workspace-panel">
                     <div style="max-width: 900px; display: flex; flex-direction: column; gap: 24px;">
+                        
+                        <!-- Configuration Card: Default Operating Modes -->
+                        <div class="settings-card" style="background: #FFFFFF; border: 1px solid var(--brand-border); border-radius: var(--radius-lg); padding: 28px; box-shadow: var(--shadow-sm);">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid var(--brand-border); padding-bottom: 16px;">
+                                <div style="display: flex; align-items: center; gap: 14px;">
+                                    <div class="active-app-icon-wrap" style="width: 42px; height: 42px; font-size: 1.2rem;">
+                                        <i class="fa-solid fa-sliders"></i>
+                                    </div>
+                                    <div>
+                                        <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; font-weight: 700; color: var(--brand-text); margin-bottom: 2px;">Report Bot Default Operating Mode</h3>
+                                        <p style="font-size: 0.88rem; color: var(--brand-text-muted);">Choose the default review mode applied to all newly uploaded lab report batches.</p>
+                                    </div>
+                                </div>
+                                <span class="service-pill pill-ready">
+                                    <span class="pill-dot"></span> Active
+                                </span>
+                            </div>
+
+                            <form id="page-settings-form">
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 20px;">
+                                    <label class="choice-card" style="margin-top: 0;">
+                                        <input type="radio" name="page_settings_review_mode" value="REVIEW" {{ 'checked' if default_review_mode == 'REVIEW' else '' }}>
+                                        <span>
+                                            <strong>Review (Default)</strong>
+                                            <small>Require manual confirmation for every report before processing.</small>
+                                        </span>
+                                    </label>
+                                    <label class="choice-card" style="margin-top: 0;">
+                                        <input type="radio" name="page_settings_review_mode" value="AUTO_APPROVE" {{ 'checked' if default_review_mode == 'AUTO_APPROVE' else '' }}>
+                                        <span>
+                                            <strong>Auto Approve</strong>
+                                            <small>Process clean files automatically; quarantine exceptions for review.</small>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <div style="background: #F8FAFC; border: 1px solid var(--brand-border); border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 24px; font-size: 0.85rem; color: var(--brand-text-muted);">
+                                    <div><strong style="color: var(--brand-text);"><i class="fa-solid fa-flask" style="color: var(--brand-primary); margin-right: 4px;"></i> Active Source:</strong> Eurofins</div>
+                                    <div><strong style="color: var(--brand-text);"><i class="fa-solid fa-clock-rotate-left" style="color: var(--brand-primary); margin-right: 4px;"></i> Retention:</strong> 1-Hour Ephemeral Cache</div>
+                                    <div><strong style="color: var(--brand-text);"><i class="fa-solid fa-dna" style="color: var(--brand-primary); margin-right: 4px;"></i> Sample Type:</strong> BUCCAL SWAB</div>
+                                </div>
+
+                                <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+                                    <span id="settings-save-indicator" style="font-size: 0.85rem; color: #10B981; display: none;">
+                                        <i class="fa-solid fa-check"></i> Saved
+                                    </span>
+                                    <button id="save-page-settings-btn" class="btn btn-primary" type="button" style="min-height: 42px; padding: 8px 24px; font-size: 0.92rem; font-weight: 600;">
+                                        <i class="fa-solid fa-floppy-disk"></i> Save Default Mode
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- System Health Card 1: Dokploy VPS -->
                         <div class="notion-sync-card" style="margin-bottom: 0;">
                             <div class="notion-icon-circle"><i class="fa-solid fa-server"></i></div>
                             <div class="notion-sync-details">
@@ -378,6 +405,7 @@
                             </div>
                         </div>
 
+                        <!-- System Health Card 2: Security & Encryption -->
                         <div class="notion-sync-card" style="margin-bottom: 0;">
                             <div class="notion-icon-circle"><i class="fa-solid fa-lock"></i></div>
                             <div class="notion-sync-details">
