@@ -1,14 +1,110 @@
 import os
 import re
 import time
+import logging
+import random
+import threading
 import concurrent.futures
 import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 NOTION_API_VERSION = "2022-06-28"
 NOTION_BASE_URL = "https://api.notion.com/v1"
+
+class NotionRateLimiter:
+    """
+    Thread-safe rate limiter to strictly respect Notion's API quota
+    (average 3 requests per second per token).
+    Paces outgoing requests to ~2.5 requests per second across all threads,
+    preventing 429 Too Many Requests spikes during concurrent batch processing.
+    """
+    def __init__(self, requests_per_second: float = 2.5):
+        self.interval = 1.0 / requests_per_second
+        self.lock = threading.Lock()
+        self.last_time = 0.0
+
+    def acquire(self):
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_time
+            if elapsed < self.interval:
+                time.sleep(self.interval - elapsed)
+            self.last_time = time.time()
+
+global_notion_limiter = NotionRateLimiter(requests_per_second=2.5)
+
+
+def execute_notion_request(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    headers: dict,
+    payload: dict | None = None,
+    files: dict | None = None,
+    timeout: float = 30.0,
+    max_retries: int = 5,
+) -> httpx.Response:
+    """
+    Executes an HTTP request to Notion API with:
+    1. Global pacing to stay under Notion's 3 req/sec rate limit.
+    2. Automatic HTTP 429 backoff reading 'Retry-After' header + jitter.
+    3. Automatic 502/503/504 transient error exponential backoff.
+    """
+    method_upper = method.upper()
+    for attempt in range(max_retries):
+        global_notion_limiter.acquire()
+        try:
+            req_kwargs = {"headers": headers, "timeout": timeout}
+            if payload is not None:
+                req_kwargs["json"] = payload
+            if files is not None:
+                req_kwargs["files"] = files
+
+            caller = getattr(client, method_upper.lower(), None)
+            if callable(caller):
+                resp = caller(url, **req_kwargs)
+            else:
+                resp = client.request(method_upper, url, **req_kwargs)
+
+            # Check 429 Rate Limit
+            if resp.status_code == 429:
+                retry_header = resp.headers.get("Retry-After") if hasattr(resp, "headers") else None
+                try:
+                    retry_after = float(retry_header) if retry_header else 1.5 * (attempt + 1)
+                except (ValueError, TypeError):
+                    retry_after = 1.5 * (attempt + 1)
+                sleep_duration = retry_after + random.uniform(0.2, 0.5)
+                logger.warning(
+                    "Notion API 429 Rate Limit encountered for %s %s. Pausing %.2fs before retry (%d/%d)...",
+                    method_upper, url, sleep_duration, attempt + 1, max_retries
+                )
+                time.sleep(sleep_duration)
+                continue
+
+            # Check 502/503/504 transient cloud errors
+            if resp.status_code in (502, 503, 504) and attempt < max_retries - 1:
+                sleep_duration = (1.0 * (2 ** attempt)) + random.uniform(0.1, 0.4)
+                logger.warning(
+                    "Notion API transient error %d for %s %s. Retrying in %.2fs (%d/%d)...",
+                    resp.status_code, method_upper, url, sleep_duration, attempt + 1, max_retries
+                )
+                time.sleep(sleep_duration)
+                continue
+
+            return resp
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            if attempt == max_retries - 1:
+                logger.error("Notion API network error on attempt %d: %s", attempt + 1, exc)
+                raise
+            sleep_duration = 0.5 * (attempt + 1)
+            time.sleep(sleep_duration)
+
+    raise RuntimeError(f"Exceeded max retries ({max_retries}) for Notion API {method_upper} {url}")
+
 
 def get_notion_headers(api_key=None):
     token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
@@ -411,7 +507,7 @@ def query_notion_database(api_key=None, database_id=None, filter_mode="manifest_
         while has_more:
             if start_cursor:
                 payload["start_cursor"] = start_cursor
-            resp = client.post(url, headers=headers, json=payload)
+            resp = execute_notion_request(client, "POST", url, headers, payload=payload, timeout=30.0)
             if resp.status_code != 200:
                 raise RuntimeError(f"Notion API error ({resp.status_code}): {resp.text}")
             data = resp.json()
@@ -486,28 +582,17 @@ def update_single_case_status(client, headers, case_id, target_status="Dispatche
             }
         }
     }
-    
-    for attempt in range(max_retries):
-        try:
-            resp = client.patch(url, headers=headers, json=payload, timeout=20.0)
-            if resp.status_code == 200:
-                return {"case_id": case_id, "success": True}
-            elif resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", 1.0))
-                time.sleep(retry_after + 0.25)
-                continue
-            else:
-                return {
-                    "case_id": case_id,
-                    "success": False,
-                    "error": f"HTTP {resp.status_code}: {resp.text}"
-                }
-        except Exception as e:
-            if attempt == max_retries - 1:
-                return {"case_id": case_id, "success": False, "error": str(e)}
-            time.sleep(0.5 * (attempt + 1))
-            
-    return {"case_id": case_id, "success": False, "error": "Max retries exceeded"}
+    try:
+        resp = execute_notion_request(client, "PATCH", url, headers=headers, payload=payload, timeout=20.0, max_retries=max_retries)
+        if resp.status_code == 200:
+            return {"case_id": case_id, "success": True}
+        return {
+            "case_id": case_id,
+            "success": False,
+            "error": f"HTTP {resp.status_code}: {resp.text}"
+        }
+    except Exception as e:
+        return {"case_id": case_id, "success": False, "error": str(e)}
 
 def update_case_status_in_notion(case_page_ids, target_status="Dispatched to Laboratory", api_key=None, max_workers=3):
     """
@@ -584,7 +669,7 @@ def find_case_page_by_code(client, headers, case_code, cases_db_id=None, part_db
                 }
             }
             try:
-                resp = client.post(url, headers=headers, json=payload, timeout=20.0)
+                resp = execute_notion_request(client, "POST", url, headers, payload=payload, timeout=20.0)
                 if resp.status_code == 200:
                     results = resp.json().get("results", [])
                     if results:
@@ -592,26 +677,46 @@ def find_case_page_by_code(client, headers, case_code, cases_db_id=None, part_db
             except Exception:
                 pass
 
-        # 2. Fallback: Query Participant DB by Case Code rich_text
+        # 2. Fallback: Query Participant DB by Case Code (tries formula, then rich_text)
         if part_db:
             url = f"{NOTION_BASE_URL}/databases/{part_db}/query"
-            payload = {
+            payload_formula = {
                 "page_size": 5,
                 "filter": {
                     "property": "Case Code",
-                    "rich_text": {
-                        "equals": candidate
+                    "formula": {
+                        "string": {
+                            "equals": candidate
+                        }
                     }
                 }
             }
             try:
-                resp = client.post(url, headers=headers, json=payload, timeout=20.0)
+                resp = execute_notion_request(client, "POST", url, headers, payload=payload_formula, timeout=20.0)
                 if resp.status_code == 200:
                     results = resp.json().get("results", [])
                     for page in results:
                         case_rel = page.get("properties", {}).get("Case", {}).get("relation", [])
                         if case_rel:
                             return case_rel[0].get("id")
+                elif resp.status_code == 400:
+                    # Fallback if Case Code property is rich_text in this workspace
+                    payload_rt = {
+                        "page_size": 5,
+                        "filter": {
+                            "property": "Case Code",
+                            "rich_text": {
+                                "equals": candidate
+                            }
+                        }
+                    }
+                    resp_rt = execute_notion_request(client, "POST", url, headers, payload=payload_rt, timeout=20.0)
+                    if resp_rt.status_code == 200:
+                        results = resp_rt.json().get("results", [])
+                        for page in results:
+                            case_rel = page.get("properties", {}).get("Case", {}).get("relation", [])
+                            if case_rel:
+                                return case_rel[0].get("id")
             except Exception:
                 pass
 
@@ -700,5 +805,257 @@ def update_cases_by_codes(case_codes, target_status="Result Review", api_key=Non
         "failed_cases": failed_cases,
         "unmatched_codes": unmatched_codes
     }
+
+
+# =============================================================================
+# NOTION DIRECT FILE UPLOAD & ATTACHMENT TO "CUSTODY PICS "
+# =============================================================================
+
+CUSTODY_PICS_PROPERTY = "Custody Pics "
+
+
+def initiate_notion_file_upload(client: httpx.Client, headers: dict, filename: str, content_type: str = "application/pdf") -> tuple[str, str]:
+    """
+    Initializes a file upload session with Notion API.
+    Returns (file_upload_id, upload_url).
+    """
+    url = f"{NOTION_BASE_URL}/file_uploads"
+    init_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    init_headers["Content-Type"] = "application/json"
+    payload = {"filename": filename, "content_type": content_type}
+    resp = execute_notion_request(client, "POST", url, headers=init_headers, payload=payload, timeout=30.0)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to initiate Notion file upload ({resp.status_code}): {resp.text}")
+    data = resp.json()
+    file_upload_id = data.get("id")
+    upload_url = data.get("upload_url") or f"{NOTION_BASE_URL}/file_uploads/{file_upload_id}/send"
+    return file_upload_id, upload_url
+
+
+def send_notion_file_bytes(client: httpx.Client, headers: dict, upload_url: str, file_bytes: bytes, filename: str) -> None:
+    """
+    Streams binary file bytes to Notion's file upload URL.
+    """
+    send_headers = {
+        "Authorization": headers.get("Authorization"),
+        "Notion-Version": headers.get("Notion-Version", NOTION_API_VERSION),
+    }
+    files = {"file": (filename, file_bytes, "application/pdf")}
+    resp = execute_notion_request(client, "POST", upload_url, headers=send_headers, files=files, timeout=60.0)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to send file content to Notion ({resp.status_code}): {resp.text}")
+
+
+def attach_report_to_case_page(
+    client: httpx.Client,
+    headers: dict,
+    page_id: str,
+    file_upload_id: str,
+    filename: str,
+    target_property: str = CUSTODY_PICS_PROPERTY,
+    update_status: bool = True,
+    target_status: str = "Result Review",
+) -> dict:
+    """
+    Appends an uploaded file to the 'Custody Pics ' property of a Notion case page
+    while preserving all preexisting documents and photos.
+    Optionally updates the case status to 'Result Review'.
+    """
+    # 1. Fetch current page to retrieve existing files
+    get_url = f"{NOTION_BASE_URL}/pages/{page_id}"
+    resp = execute_notion_request(client, "GET", get_url, headers=headers, timeout=25.0)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Could not retrieve Notion page {page_id} ({resp.status_code}): {resp.text}")
+
+    page_data = resp.json()
+    props = page_data.get("properties", {})
+
+    # Match exact target_property or find property containing 'Custody'
+    matched_prop_name = target_property
+    if matched_prop_name not in props:
+        for p_name in props:
+            if "custody" in p_name.lower():
+                matched_prop_name = p_name
+                break
+
+    existing_files = props.get(matched_prop_name, {}).get("files", [])
+
+    # Preserve existing files, omitting any previous upload with the exact same report filename
+    preserved_files = []
+    for f in existing_files:
+        f_name = f.get("name", "")
+        if f_name == filename:
+            continue
+        ftype = f.get("type")
+        if ftype == "file" and "file" in f:
+            preserved_files.append({"name": f_name, "type": "file", "file": {"url": f["file"]["url"]}})
+        elif ftype == "external" and "external" in f:
+            preserved_files.append({"name": f_name, "type": "external", "external": {"url": f["external"]["url"]}})
+        elif ftype == "file_upload" and "file_upload" in f:
+            preserved_files.append({"name": f_name, "type": "file_upload", "file_upload": {"id": f["file_upload"]["id"]}})
+
+    # Append new file_upload object
+    new_entry = {
+        "name": filename,
+        "type": "file_upload",
+        "file_upload": {"id": file_upload_id}
+    }
+    combined_files = preserved_files + [new_entry]
+
+    properties_update: dict = {
+        matched_prop_name: {
+            "files": combined_files
+        }
+    }
+
+    if update_status:
+        status_prop = props.get("Status")
+        if status_prop:
+            stype = status_prop.get("type")
+            if stype == "status":
+                properties_update["Status"] = {"status": {"name": target_status}}
+            else:
+                properties_update["Status"] = {"select": {"name": target_status}}
+
+    # 2. Patch page
+    patch_url = f"{NOTION_BASE_URL}/pages/{page_id}"
+    patch_resp = execute_notion_request(client, "PATCH", patch_url, headers=headers, payload={"properties": properties_update}, timeout=30.0)
+    if patch_resp.status_code != 200:
+        raise RuntimeError(f"Failed to attach report to Notion page {page_id} ({patch_resp.status_code}): {patch_resp.text}")
+
+    return {
+        "success": True,
+        "page_id": page_id,
+        "property": matched_prop_name,
+        "total_files": len(combined_files),
+        "status_updated": update_status,
+    }
+
+
+def upload_single_case_report(
+    case_code: str,
+    pdf_bytes: bytes,
+    filename: str,
+    page_id: str | None = None,
+    api_key: str | None = None,
+    update_status: bool = True,
+    target_status: str = "Result Review",
+) -> dict:
+    """
+    Handles end-to-end file upload and attachment for a single report.
+    Resolves page_id if not provided.
+    """
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
+    headers = get_notion_headers(token)
+    cases_db = os.getenv("NOTION_CASES_DB_ID", "382c226a-2e86-48f1-b70e-c4e9e8f62d1d")
+    part_db = os.getenv("NOTION_DATABASE_ID") or os.getenv("NOTION_PARTICIPANT_DB_ID")
+
+    with httpx.Client(timeout=45.0) as client:
+        # Resolve page ID if needed
+        resolved_page_id = page_id
+        if not resolved_page_id:
+            resolved_page_id = find_case_page_by_code(client, headers, case_code, cases_db_id=cases_db, part_db_id=part_db)
+
+        if not resolved_page_id:
+            return {
+                "success": False,
+                "case_code": case_code,
+                "filename": filename,
+                "error": f"Case code '{case_code}' not found in Notion database",
+            }
+
+        # 1. Initiate upload
+        file_upload_id, upload_url = initiate_notion_file_upload(client, headers, filename)
+
+        # 2. Send bytes
+        send_notion_file_bytes(client, headers, upload_url, pdf_bytes, filename)
+
+        # 3. Attach to page
+        res = attach_report_to_case_page(
+            client=client,
+            headers=headers,
+            page_id=resolved_page_id,
+            file_upload_id=file_upload_id,
+            filename=filename,
+            update_status=update_status,
+            target_status=target_status,
+        )
+
+        return {
+            "success": True,
+            "case_code": case_code,
+            "page_id": resolved_page_id,
+            "filename": filename,
+            "details": res,
+        }
+
+
+def upload_batch_reports_to_notion(
+    items_data: list[dict],
+    api_key: str | None = None,
+    update_status: bool = True,
+    target_status: str = "Result Review",
+    max_workers: int = 2,
+) -> dict:
+    """
+    Uploads a list of generated report files to their respective Notion case pages.
+    items_data: list of dicts with keys:
+      - 'item_id': str
+      - 'case_code': str
+      - 'filename': str
+      - 'pdf_bytes': bytes
+      - 'page_id': str | None (optional)
+    """
+    results = []
+    success_count = 0
+    fail_count = 0
+
+    token = api_key or os.getenv("NOTION_API_KEY") or os.getenv("NOTION_TOKEN")
+
+    def _worker(item):
+        code = item.get("case_code", "")
+        filename = item.get("filename", "")
+        pdf_bytes = item.get("pdf_bytes", b"")
+        page_id = item.get("page_id")
+        item_id = item.get("item_id")
+
+        try:
+            res = upload_single_case_report(
+                case_code=code,
+                pdf_bytes=pdf_bytes,
+                filename=filename,
+                page_id=page_id,
+                api_key=token,
+                update_status=update_status,
+                target_status=target_status,
+            )
+            res["item_id"] = item_id
+            return res
+        except Exception as exc:
+            return {
+                "success": False,
+                "item_id": item_id,
+                "case_code": code,
+                "filename": filename,
+                "error": str(exc),
+            }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_worker, item) for item in items_data]
+        for f in concurrent.futures.as_completed(futures):
+            res = f.result()
+            results.append(res)
+            if res.get("success"):
+                success_count += 1
+            else:
+                fail_count += 1
+
+    return {
+        "total": len(items_data),
+        "uploaded": success_count,
+        "failed": fail_count,
+        "results": results,
+    }
+
 
 

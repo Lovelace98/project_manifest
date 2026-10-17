@@ -35,6 +35,8 @@ from notion_service import (
     fetch_manifest_cases,
     update_case_status_in_notion,
     update_cases_by_codes,
+    upload_batch_reports_to_notion,
+    upload_single_case_report,
 )
 from auth import verify_credentials, is_rate_limited, new_csrf_token, clear_rate_limits
 
@@ -70,6 +72,13 @@ from report_bot.parsing import (
 from report_bot.pipeline import ReportPipeline
 from report_bot.preferences import PreferencesStore
 from report_bot.store import JobNotFoundError, JobStore
+from report_bot.integrity import (
+    detect_layout_anomalies,
+    fetch_notion_verification_data,
+    determine_report_classification,
+    cross_verify_participants,
+)
+import concurrent.futures
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -123,6 +132,13 @@ def _public_item(item: JobItem) -> dict[str, Any]:
         "approved": item.approved,
         "output_filename": item.output_filename,
         "processing_error": item.processing_error,
+        "layout_warnings": item.layout_warnings,
+        "classification_info": item.classification_info,
+        "notion_verification": item.notion_verification,
+        "needs_manual_review": item.needs_manual_review,
+        "notion_page_id": item.notion_page_id,
+        "notion_upload_status": item.notion_upload_status,
+        "notion_upload_error": item.notion_upload_error,
     }
 
 def _public_job(job: JobRecord) -> dict[str, Any]:
@@ -131,6 +147,7 @@ def _public_job(job: JobRecord) -> dict[str, Any]:
         "lab_source": job.lab_source.value,
         "review_mode": job.review_mode.value,
         "default_case_type": job.default_case_type.value,
+        "auto_upload_notion": job.auto_upload_notion,
         "state": job.state.value,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
@@ -208,6 +225,63 @@ def _schedule_processing(app: FastAPI, job_id: str) -> None:
                     job_id,
                     app.state.job_store,
                 )
+
+            # Check if auto-upload to Notion is requested
+            with suppress(JobNotFoundError):
+                job = app.state.job_store.get(job_id)
+                if job.auto_upload_notion and job.state == JobState.COMPLETE:
+                    eligible_items = [
+                        item for item in job.items
+                        if item.state == ItemState.COMPLETE
+                        and item.output_path
+                        and item.output_path.exists()
+                        and item.report
+                        and item.report.case_code
+                    ]
+                    if eligible_items:
+                        items_data = [
+                            {
+                                "item_id": item.id,
+                                "case_code": item.report.case_code,
+                                "filename": item.output_filename or f"{item.report.case_code}.pdf",
+                                "pdf_bytes": item.output_path.read_bytes(),
+                                "page_id": item.notion_page_id,
+                            }
+                            for item in eligible_items
+                        ]
+                        for item in eligible_items:
+                            item.notion_upload_status = "UPLOADING"
+                        app.state.job_store.save(job)
+
+                        try:
+                            res = await asyncio.to_thread(
+                                upload_batch_reports_to_notion,
+                                items_data=items_data,
+                                update_status=True,
+                                target_status="Result Review",
+                            )
+                            result_map = {r.get("item_id"): r for r in res.get("results", [])}
+                            for item in eligible_items:
+                                r = result_map.get(item.id)
+                                if r and r.get("success"):
+                                    item.notion_upload_status = "UPLOADED"
+                                    item.notion_upload_error = None
+                                    if r.get("page_id") and not item.notion_page_id:
+                                        item.notion_page_id = r.get("page_id")
+                                elif r:
+                                    item.notion_upload_status = "FAILED"
+                                    item.notion_upload_error = r.get("error", "Upload failed")
+                                else:
+                                    item.notion_upload_status = "FAILED"
+                                    item.notion_upload_error = "Upload failed"
+                        except Exception as e:
+                            logger.exception("Auto-upload to Notion failed", extra={"job_id": job_id})
+                            for item in eligible_items:
+                                if item.notion_upload_status == "UPLOADING":
+                                    item.notion_upload_status = "FAILED"
+                                    item.notion_upload_error = str(e)
+                        finally:
+                            app.state.job_store.save(job)
         except Exception:
             logger.exception("Background job failed", extra={"job_id": job_id})
             with suppress(JobNotFoundError):
@@ -426,6 +500,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "user": request.session.get("user", "Admin"),
                 "csrf_token": csrf_token,
                 "default_review_mode": preferences.default_review_mode.value,
+                "default_case_type": getattr(preferences, "default_case_type", CaseType.PERSONAL).value,
                 "max_batch_files": application_settings.max_batch_files,
                 "notion_ready": notion_ready,
                 "libreoffice_ready": lo_available,
@@ -616,9 +691,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         files: Annotated[list[UploadFile], File()],
         review_mode: Annotated[ReviewMode, Form()],
-        default_case_type: Annotated[CaseType, Form()],
+        default_case_type: Annotated[CaseType, Form()] = CaseType.PERSONAL,
         lab_source: Annotated[LabSource, Form()] = LabSource.EUROFINS,
         case_types: Annotated[list[CaseType] | None, Form()] = None,
+        auto_upload_notion: Annotated[bool, Form()] = False,
     ):
         _require_mutation(request)
         if not files or len(files) > application_settings.max_batch_files:
@@ -636,6 +712,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lab_source=lab_source,
             review_mode=review_mode,
             default_case_type=default_case_type,
+            auto_upload_notion=auto_upload_notion,
             expires_at=app.state.job_store.new_expiry(),
         )
         app.state.job_store.create(job)
@@ -690,6 +767,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 finally:
                     await upload.close()
 
+            # Run integrity, layout anomaly detection & Notion cross-verification
+            parsed_items = [item for item in job.items if item.report and item.state != ItemState.FAILED]
+            if parsed_items:
+                case_codes = [item.report.case_code for item in parsed_items]
+                unique_codes = list(dict.fromkeys(case_codes))
+                notion_data_map = {}
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(unique_codes))) as executor:
+                    future_to_code = {
+                        executor.submit(fetch_notion_verification_data, code): code
+                        for code in unique_codes
+                    }
+                    for future in concurrent.futures.as_completed(future_to_code):
+                        c = future_to_code[future]
+                        try:
+                            notion_data_map[c] = future.result()
+                        except Exception as e:
+                            logger.warning("Notion verification failed for %s: %s", c, e)
+                            notion_data_map[c] = {"notion_available": False, "found": False}
+
+                for item in parsed_items:
+                    source_content = item.source_path.read_bytes()
+                    # 1. Layout anomaly detection
+                    anomalies = detect_layout_anomalies(
+                        source_content,
+                        job.lab_source,
+                        item.case_type,
+                        item.report.test_type,
+                    )
+                    item.layout_warnings = anomalies
+                    if anomalies:
+                        item.needs_manual_review = True
+                        for warning in anomalies:
+                            if warning not in item.report.warnings:
+                                item.report.warnings.append(f"⚠️ {warning}")
+
+                    # 2. Dual 'AND' auto-classification
+                    n_data = notion_data_map.get(item.report.case_code)
+                    if n_data and n_data.get("case_page_id"):
+                        item.notion_page_id = n_data["case_page_id"]
+                    classification = determine_report_classification(
+                        item.report.case_code,
+                        n_data,
+                        default_case_type,
+                    )
+                    item.classification_info = classification
+                    item.case_type = classification["case_type"]
+                    if classification.get("needs_manual_review"):
+                        item.needs_manual_review = True
+                        reason = classification.get("reason")
+                        if reason and reason not in item.report.warnings:
+                            item.report.warnings.append(f"⚠️ {reason}")
+
+                    # 3. Participant cross-verification against Notion Participant DB
+                    n_parts = n_data.get("participants", []) if n_data else []
+                    part_check = cross_verify_participants(item.report.participants, n_parts)
+                    item.notion_verification = part_check
+                    if not part_check.get("verified"):
+                        item.needs_manual_review = True
+                        for disc in part_check.get("discrepancies", []):
+                            disc_msg = f"⚠️ Notion Discrepancy: {disc}"
+                            if disc_msg not in item.report.warnings:
+                                item.report.warnings.append(disc_msg)
+
             _duplicate_case_warnings(job)
             if review_mode == ReviewMode.AUTO_APPROVE:
                 for item in job.items:
@@ -703,6 +843,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and not item.report.blocking_errors
                         and not has_shared_case
                         and item.report.confidence >= 0.9
+                        and not item.needs_manual_review
+                        and not item.layout_warnings
                     ):
                         item.approved = True
                         item.state = ItemState.APPROVED
@@ -775,6 +917,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         item.report = report
         item.approved = False
         item.state = ItemState.NEEDS_REVIEW
+        item.needs_manual_review = False
         _duplicate_case_warnings(job)
         app.state.job_store.save(job)
         return _public_item(item)
@@ -827,6 +970,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             job.zip_path,
             media_type="application/zip",
             filename="Blueprint-Reports.zip",
+        )
+
+    @app.get("/api/jobs/{job_id}/items/{item_id}/download")
+    async def download_item(request: Request, job_id: str, item_id: str):
+        _require_api(request)
+        job = _get_job(request, job_id)
+        item = _find_item(job, item_id)
+        if not item.output_path or not item.output_path.exists():
+            raise HTTPException(status_code=404, detail="Processed file not found")
+        return FileResponse(
+            item.output_path,
+            media_type="application/pdf",
+            filename=item.output_filename or f"{item.id}.pdf",
         )
 
     @app.post("/api/jobs/{job_id}/sync-notion-status")
@@ -882,6 +1038,134 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.exception("Failed to sync case statuses to Notion", extra={"job_id": job.id})
             return JSONResponse(
                 {"error": f"Failed to sync with Notion: {str(e)}"},
+                status_code=500,
+            )
+
+    @app.post("/api/jobs/{job_id}/upload-notion-reports")
+    async def upload_job_notion_reports(request: Request, job_id: str):
+        _require_api(request)
+        job = _get_job(request, job_id)
+        
+        eligible_items = [
+            item for item in job.items
+            if item.state == ItemState.COMPLETE
+            and item.output_path
+            and item.output_path.exists()
+            and item.report
+            and item.report.case_code
+        ]
+        
+        if not eligible_items:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": "No finalised reports available to upload.",
+                    "total": 0,
+                    "uploaded": 0,
+                    "failed": 0,
+                    "results": [],
+                },
+                status_code=400,
+            )
+
+        items_data = []
+        for item in eligible_items:
+            items_data.append({
+                "item_id": item.id,
+                "case_code": item.report.case_code,
+                "filename": item.output_filename or f"{item.report.case_code}.pdf",
+                "pdf_bytes": item.output_path.read_bytes(),
+                "page_id": item.notion_page_id,
+            })
+            item.notion_upload_status = "UPLOADING"
+            item.notion_upload_error = None
+
+        app.state.job_store.save(job)
+
+        try:
+            res = await asyncio.to_thread(
+                upload_batch_reports_to_notion,
+                items_data=items_data,
+                update_status=True,
+                target_status="Result Review",
+            )
+            result_map = {r.get("item_id"): r for r in res.get("results", [])}
+            for item in eligible_items:
+                r = result_map.get(item.id)
+                if r and r.get("success"):
+                    item.notion_upload_status = "UPLOADED"
+                    item.notion_upload_error = None
+                    if r.get("page_id") and not item.notion_page_id:
+                        item.notion_page_id = r.get("page_id")
+                elif r:
+                    item.notion_upload_status = "FAILED"
+                    item.notion_upload_error = r.get("error", "Upload failed")
+                else:
+                    item.notion_upload_status = "FAILED"
+                    item.notion_upload_error = "Upload failed"
+
+            app.state.job_store.save(job)
+            return JSONResponse({
+                "job_id": job.id,
+                "success": res.get("failed", 0) == 0 and res.get("uploaded", 0) > 0,
+                **res,
+            })
+        except Exception as e:
+            logger.exception("Failed to upload reports to Notion", extra={"job_id": job.id})
+            for item in eligible_items:
+                if item.notion_upload_status == "UPLOADING":
+                    item.notion_upload_status = "FAILED"
+                    item.notion_upload_error = str(e)
+            app.state.job_store.save(job)
+            return JSONResponse(
+                {"error": f"Failed to upload reports to Notion: {str(e)}"},
+                status_code=500,
+            )
+
+    @app.post("/api/jobs/{job_id}/items/{item_id}/upload-notion-report")
+    async def upload_item_notion_report(request: Request, job_id: str, item_id: str):
+        _require_api(request)
+        job = _get_job(request, job_id)
+        item = _find_item(job, item_id)
+        
+        if item.state != ItemState.COMPLETE or not item.output_path or not item.output_path.exists():
+            raise HTTPException(status_code=400, detail="Report must be completed before uploading to Notion")
+        if not item.report or not item.report.case_code:
+            raise HTTPException(status_code=400, detail="Report case code is missing")
+
+        item.notion_upload_status = "UPLOADING"
+        item.notion_upload_error = None
+        app.state.job_store.save(job)
+
+        try:
+            filename = item.output_filename or f"{item.report.case_code}.pdf"
+            pdf_bytes = item.output_path.read_bytes()
+            res = await asyncio.to_thread(
+                upload_single_case_report,
+                case_code=item.report.case_code,
+                pdf_bytes=pdf_bytes,
+                filename=filename,
+                page_id=item.notion_page_id,
+                update_status=True,
+                target_status="Result Review",
+            )
+            if res.get("success"):
+                item.notion_upload_status = "UPLOADED"
+                item.notion_upload_error = None
+                if res.get("page_id"):
+                    item.notion_page_id = res.get("page_id")
+            else:
+                item.notion_upload_status = "FAILED"
+                item.notion_upload_error = res.get("error", "Upload failed")
+            app.state.job_store.save(job)
+            return JSONResponse({"item_id": item.id, **res})
+        except Exception as e:
+            logger.exception("Single report upload to Notion failed", extra={"item_id": item.id})
+            item.notion_upload_status = "FAILED"
+            item.notion_upload_error = str(e)
+            app.state.job_store.save(job)
+            return JSONResponse(
+                {"success": False, "item_id": item.id, "error": str(e)},
                 status_code=500,
             )
 

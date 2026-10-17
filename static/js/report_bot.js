@@ -18,13 +18,107 @@ const reviewDetail = document.getElementById("review-detail");
 const processButton = document.getElementById("process-button");
 const downloadButton = document.getElementById("download-button");
 const syncNotionButton = document.getElementById("sync-notion-button");
+const uploadNotionButton = document.getElementById("upload-notion-button");
 const notionSyncBanner = document.getElementById("notion-sync-banner");
 const autoSyncNotionCheckbox = document.getElementById("auto-sync-notion");
+const autoUploadNotionCheckbox = document.getElementById("auto-upload-notion");
 const globalAlert = document.getElementById("global-alert");
 const settingsDialog = document.getElementById("settings-dialog");
+const summaryPanel = document.getElementById("summary-panel");
+const summaryTableBody = document.getElementById("summary-table-body");
+const summaryTotalCount = document.getElementById("summary-total-count");
+const summaryCleanCount = document.getElementById("summary-clean-count");
+const summaryFlaggedCount = document.getElementById("summary-flagged-count");
+const summaryNotionCount = document.getElementById("summary-notion-count");
+const summaryBadge = document.getElementById("summary-badge");
+const summaryDownloadBtn = document.getElementById("summary-download-btn");
+const summarySyncNotionBtn = document.getElementById("summary-sync-notion-btn");
+const summaryUploadNotionBtn = document.getElementById("summary-upload-notion-btn");
+const summaryBackReviewBtn = document.getElementById("summary-back-review-btn");
+const summaryNewBatchBtn = document.getElementById("summary-new-batch-btn");
+const viewSummaryButton = document.getElementById("view-summary-button");
+const loadingOverlay = document.getElementById("loading-overlay");
+const extractionStepper = document.getElementById("extraction-stepper");
+let extractionInterval = null;
 
 const initialModeRadio = document.querySelector(`input[name="review_mode"][value="${defaultReviewMode}"]`);
 if (initialModeRadio) initialModeRadio.checked = true;
+
+function showExtractionLoader() {
+  if (!loadingOverlay) return;
+  const loaderTitle = document.getElementById("loader-title");
+  const loaderDesc = document.getElementById("loader-desc");
+  if (loaderTitle) loaderTitle.textContent = "Analyzing Report Batch...";
+  if (loaderDesc) loaderDesc.textContent = "Auditing PDF layouts, verifying Notion database records, and auto-classifying report types.";
+
+  if (extractionStepper) {
+    extractionStepper.style.display = "flex";
+    const steps = [
+      document.getElementById("step-extract"),
+      document.getElementById("step-layout"),
+      document.getElementById("step-notion"),
+      document.getElementById("step-classify"),
+    ].filter(Boolean);
+
+    steps.forEach((step, idx) => {
+      step.className = `extract-step ${idx === 0 ? "is-active" : "is-pending"}`;
+      const bullet = step.querySelector(".step-bullet");
+      if (bullet) {
+        bullet.innerHTML = idx === 0 ? '<i class="fa-solid fa-circle-notch fa-spin"></i>' : '<i class="fa-regular fa-circle"></i>';
+      }
+    });
+
+    let currentStep = 0;
+    window.clearInterval(extractionInterval);
+    extractionInterval = window.setInterval(() => {
+      if (currentStep < steps.length - 1) {
+        steps[currentStep].className = "extract-step is-complete is-done";
+        const bulletPrev = steps[currentStep].querySelector(".step-bullet");
+        if (bulletPrev) bulletPrev.innerHTML = '<i class="fa-solid fa-check"></i>';
+
+        currentStep++;
+        steps[currentStep].className = "extract-step is-active";
+        const bulletNext = steps[currentStep].querySelector(".step-bullet");
+        if (bulletNext) bulletNext.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+      } else {
+        if (loaderDesc) loaderDesc.textContent = "Finalizing Notion cross-checks and preparing review workspace...";
+      }
+    }, 550);
+  }
+  loadingOverlay.style.display = "flex";
+}
+
+async function finishExtractionLoader() {
+  window.clearInterval(extractionInterval);
+  const steps = [
+    document.getElementById("step-extract"),
+    document.getElementById("step-layout"),
+    document.getElementById("step-notion"),
+    document.getElementById("step-classify"),
+  ].filter(Boolean);
+
+  steps.forEach((step) => {
+    step.className = "extract-step is-complete is-done";
+    const bullet = step.querySelector(".step-bullet");
+    if (bullet) bullet.innerHTML = '<i class="fa-solid fa-check"></i>';
+  });
+
+  const loaderTitle = document.getElementById("loader-title");
+  const loaderDesc = document.getElementById("loader-desc");
+  if (loaderTitle) loaderTitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color: #10B981; margin-right: 6px;"></i> Batch Analysis Complete!';
+  if (loaderDesc) loaderDesc.textContent = "All layout checks and Notion records verified. Loading workspace...";
+
+  await new Promise((resolve) => setTimeout(resolve, 450));
+
+  if (loadingOverlay) loadingOverlay.style.display = "none";
+  if (extractionStepper) extractionStepper.style.display = "none";
+}
+
+function hideExtractionLoader() {
+  window.clearInterval(extractionInterval);
+  if (loadingOverlay) loadingOverlay.style.display = "none";
+  if (extractionStepper) extractionStepper.style.display = "none";
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -79,14 +173,15 @@ function displaySelectedFiles() {
     selectedFiles.textContent = "No files selected.";
     return;
   }
-  const batchDefault = document.querySelector('input[name="default_case_type"]:checked').value;
   selectedFiles.innerHTML = selectedFilesList.map((file, index) => `
     <div class="selected-file-row">
-      <span>${escapeHtml(file.name)}</span>
-      <select name="case_types" aria-label="Report type for ${escapeHtml(file.name)}">
-        <option value="PERSONAL"${batchDefault === "PERSONAL" ? " selected" : ""}>PERSONAL</option>
-        <option value="CERTIFIED_LEGAL"${batchDefault === "CERTIFIED_LEGAL" ? " selected" : ""}>CERTIFIED / LEGAL</option>
-      </select>
+      <div class="selected-file-meta">
+        <i class="fa-regular fa-file-pdf" style="color: #0284c7; margin-right: 8px;"></i>
+        <strong>${escapeHtml(file.name)}</strong>
+        <span class="file-tag-badge" style="margin-left: 8px; font-size: 0.72rem; padding: 2px 8px; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 999px;">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Detect Type
+        </span>
+      </div>
       <button type="button" class="file-remove-button" data-index="${index}" title="Remove file" aria-label="Remove ${escapeHtml(file.name)}">×</button>
     </div>`).join("");
 }
@@ -151,6 +246,131 @@ function typeOptions(current) {
   return options.map((value) => `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
 }
 
+function railTagsHtml(item) {
+  const tags = [];
+  const isPersonal = item.case_type === "PERSONAL";
+  tags.push(`<span class="rail-mini-badge ${isPersonal ? "badge-pill-neutral" : "badge-pill-info"}">${isPersonal ? "Personal" : "Certified"}</span>`);
+
+  if (item.layout_warnings && item.layout_warnings.length > 0) {
+    tags.push(`<span class="rail-mini-badge badge-pill-warning" title="${escapeHtml(item.layout_warnings.join('; '))}"><i class="fa-solid fa-triangle-exclamation"></i> Layout Alert</span>`);
+  } else if (item.report) {
+    tags.push(`<span class="rail-mini-badge badge-pill-success"><i class="fa-solid fa-check"></i> Layout OK</span>`);
+  }
+
+  if (item.needs_manual_review) {
+    tags.push(`<span class="rail-mini-badge badge-pill-warning"><i class="fa-solid fa-circle-exclamation"></i> Review Needed</span>`);
+  } else if (item.notion_verification?.has_notion_records && item.notion_verification?.verified) {
+    tags.push(`<span class="rail-mini-badge badge-pill-success"><i class="fa-solid fa-cloud-check"></i> Notion Verified</span>`);
+  } else if (item.classification_info?.verified) {
+    tags.push(`<span class="rail-mini-badge badge-pill-success"><i class="fa-solid fa-check-double"></i> Confirmed</span>`);
+  }
+
+  return `<div class="rail-tags-row">${tags.join("")}</div>`;
+}
+
+function integrityCardHtml(item) {
+  if (!item || !item.report) return "";
+  const layoutOk = !item.layout_warnings || item.layout_warnings.length === 0;
+  const classInfo = item.classification_info || {};
+  const notionVer = item.notion_verification || {};
+
+  const layoutBadgeClass = layoutOk ? "badge-pill-success" : "badge-pill-warning";
+  const layoutBadgeIcon = layoutOk ? "fa-circle-check" : "fa-triangle-exclamation";
+  const layoutBadgeText = layoutOk ? "Layout Verified" : `${item.layout_warnings.length} Layout Alert(s)`;
+
+  const classBadgeClass = `badge-pill-${escapeHtml(classInfo.badge_status || (item.case_type === "PERSONAL" ? "neutral" : "info"))}`;
+  const classBadgeText = classInfo.badge_label || (item.case_type === "PERSONAL" ? "Personal" : "Certified / Legal");
+
+  let notionBadgeClass = "badge-pill-neutral";
+  let notionBadgeIcon = "fa-cloud";
+  let notionBadgeText = "Not in Notion DB";
+  if (notionVer.has_notion_records) {
+    if (notionVer.verified) {
+      notionBadgeClass = "badge-pill-success";
+      notionBadgeIcon = "fa-cloud-check";
+      notionBadgeText = "Notion Records Match";
+    } else {
+      notionBadgeClass = "badge-pill-warning";
+      notionBadgeIcon = "fa-triangle-exclamation";
+      notionBadgeText = "Notion Discrepancies";
+    }
+  }
+
+  let html = `
+    <div class="integrity-card">
+      <div class="integrity-card-header">
+        <div class="integrity-card-title">
+          <i class="fa-solid fa-shield-halved" style="color: var(--brand-primary, #0284c7);"></i>
+          <span>Automated Layout &amp; Notion Verification</span>
+        </div>
+        <div class="integrity-badges-wrap">
+          <span class="badge-pill ${layoutBadgeClass}"><i class="fa-solid ${layoutBadgeIcon}"></i> ${escapeHtml(layoutBadgeText)}</span>
+          <span class="badge-pill ${classBadgeClass}"><i class="fa-solid fa-robot"></i> ${escapeHtml(classBadgeText)}</span>
+          <span class="badge-pill ${notionBadgeClass}"><i class="fa-solid ${notionBadgeIcon}"></i> ${escapeHtml(notionBadgeText)}</span>
+        </div>
+      </div>`;
+
+  if (item.layout_warnings && item.layout_warnings.length > 0) {
+    html += `
+      <div class="integrity-discrepancy-box">
+        <strong><i class="fa-solid fa-triangle-exclamation"></i> Layout Shifts Detected in Motherlab Report:</strong>
+        <ul style="margin: 4px 0 0 16px; padding: 0;">
+          ${item.layout_warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}
+        </ul>
+      </div>`;
+  }
+
+  if (classInfo.mismatch || classInfo.needs_manual_review) {
+    html += `
+      <div class="integrity-discrepancy-box" style="background: #fffbeb; border-color: #fde68a;">
+        <strong style="color: #92400e;"><i class="fa-solid fa-triangle-exclamation" style="color: #d97706; margin-right: 4px;"></i> Classification Alert:</strong>
+        <p style="margin: 4px 0 0; color: #78350f;">${escapeHtml(classInfo.reason)}</p>
+      </div>`;
+  }
+
+  if (notionVer.discrepancies && notionVer.discrepancies.length > 0) {
+    html += `
+      <div class="integrity-discrepancy-box">
+        <strong><i class="fa-solid fa-circle-exclamation"></i> Notion Participant Cross-Check Discrepancies:</strong>
+        <ul style="margin: 4px 0 0 16px; padding: 0;">
+          ${notionVer.discrepancies.map(d => `<li>${escapeHtml(d)}</li>`).join("")}
+        </ul>
+      </div>`;
+  }
+
+  if (notionVer.comparison && notionVer.comparison.length > 0) {
+    html += `
+      <div class="table-scroll" style="margin-top: 4px;">
+        <table class="integrity-comparison-table">
+          <thead>
+            <tr>
+              <th>PARTICIPANT</th>
+              <th>PDF REPORT DETAILS</th>
+              <th>NOTION DB RECORD</th>
+              <th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${notionVer.comparison.map(comp => `
+              <tr class="${comp.status !== 'MATCHED' ? 'row-diff-mismatch' : ''}">
+                <td><strong>${escapeHtml(comp.pdf_name || comp.notion_name || 'Participant')}</strong></td>
+                <td>${escapeHtml((comp.pdf_role || '-') + ' · DOB: ' + (comp.pdf_dob || '-'))}</td>
+                <td>${escapeHtml((comp.notion_role || '-') + ' · DOB: ' + (comp.notion_dob || '-'))}</td>
+                <td>
+                  ${comp.status === 'MATCHED'
+                    ? '<span class="badge-pill badge-pill-success"><i class="fa-solid fa-check"></i> Matched</span>'
+                    : `<span class="badge-pill badge-pill-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(comp.status.replace(/_/g, ' '))}</span>`}
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 function renderDetail(item) {
   if (!item) {
     reviewDetail.innerHTML = '<div class="empty-state"><strong>Select a report</strong><span>Extracted details will appear here.</span></div>';
@@ -180,6 +400,8 @@ function renderDetail(item) {
       </div>
       ${reportWarnings(item)}
       ${item.processing_error ? `<div class="alert alert-danger" role="alert">${escapeHtml(item.processing_error)}</div>` : ""}
+      ${item.needs_manual_review ? `<div class="alert alert-warning" role="alert"><i class="fa-solid fa-circle-exclamation"></i> <strong>Manual Review Required:</strong> Automated integrity checks flagged this report. Verify the details below and save to confirm.</div>` : ""}
+      ${integrityCardHtml(item)}
       <div class="detail-grid">
         <label class="field">Case reference<input name="case_code" value="${escapeHtml(report.case_code)}" required ${locked ? "disabled" : ""}></label>
         <label class="field">Report type
@@ -216,6 +438,11 @@ function renderDetail(item) {
 function renderJob() {
   const job = state.job;
   if (!job) return;
+  if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+    renderBatchSummary(job);
+    return;
+  }
+  if (summaryPanel) summaryPanel.classList.add("is-hidden");
   uploadPanel.classList.add("is-hidden");
   jobPanel.classList.remove("is-hidden");
   const jobState = document.getElementById("job-state");
@@ -226,6 +453,7 @@ function renderJob() {
     <button class="file-row${item.id === state.selectedItemId ? " is-active" : ""}" type="button" data-item-id="${escapeHtml(item.id)}">
       <strong>${escapeHtml(item.original_filename)}</strong>
       <small>${escapeHtml(item.report?.case_code || "NOT EXTRACTED")}</small>
+      ${railTagsHtml(item)}
       <span class="status-chip ${statusClass(item.state)}">${escapeHtml(stateLabel(item.state))}</span>
     </button>`).join("");
   fileRail.querySelectorAll("[data-item-id]").forEach((button) => {
@@ -240,8 +468,10 @@ function renderJob() {
   }
   renderDetail(job.items.find((item) => item.id === state.selectedItemId));
 
-  const approved = job.items.filter((item) => item.approved).length;
-  processButton.disabled = approved === 0 || ["PROCESSING", "COMPLETE"].includes(job.state);
+  const approvedCount = job.items.filter((item) => item.approved).length;
+  if (processButton) {
+    processButton.disabled = approvedCount === 0 || ["PROCESSING", "COMPLETE"].includes(job.state);
+  }
   const processing = job.state === "PROCESSING";
   document.getElementById("processing-summary").classList.toggle("is-hidden", !processing);
   document.getElementById("progress-value").textContent = `${job.progress}%`;
@@ -251,14 +481,146 @@ function renderJob() {
   downloadButton.classList.toggle("is-hidden", !job.download_ready);
   if (job.download_ready) downloadButton.href = `/api/jobs/${job.id}/download`;
 
+  if (viewSummaryButton) {
+    viewSummaryButton.classList.toggle("is-hidden", !(job.download_ready || job.state === "COMPLETE"));
+  }
+
   const hasCaseCodes = job.items.some((item) => item.report && item.report.case_code);
   if (syncNotionButton) {
     syncNotionButton.classList.toggle("is-hidden", !hasCaseCodes);
+  }
+  const hasCompletedItems = job.items.some((item) => item.state === "COMPLETE" && item.output_filename);
+  if (uploadNotionButton) {
+    uploadNotionButton.classList.toggle("is-hidden", !hasCompletedItems);
   }
 
   if (job.download_ready) setWorkflowStep("download");
   else if (processing) setWorkflowStep("process");
   else setWorkflowStep("review");
+}
+
+function renderBatchSummary(job) {
+  if (!job) return;
+  const totalCount = job.items.length;
+  const flaggedCount = job.items.filter(i =>
+    i.needs_manual_review ||
+    (i.layout_warnings && i.layout_warnings.length > 0) ||
+    (i.notion_verification?.discrepancies && i.notion_verification.discrepancies.length > 0)
+  ).length;
+  const notionDiscrepancyCount = job.items.filter(i =>
+    i.notion_verification?.discrepancies && i.notion_verification.discrepancies.length > 0
+  ).length;
+  const cleanCount = Math.max(0, totalCount - flaggedCount);
+
+  if (summaryTotalCount) summaryTotalCount.textContent = totalCount;
+  if (summaryCleanCount) summaryCleanCount.textContent = cleanCount;
+  if (summaryFlaggedCount) summaryFlaggedCount.textContent = flaggedCount;
+  if (summaryNotionCount) summaryNotionCount.textContent = notionDiscrepancyCount;
+
+  if (summaryBadge) {
+    if (flaggedCount === 0) {
+      summaryBadge.className = "status-chip status-success";
+      summaryBadge.textContent = "ALL VERIFIED & CLEAN";
+    } else {
+      summaryBadge.className = "status-chip status-warning";
+      summaryBadge.textContent = `${flaggedCount} FLAGGED FOR REVIEW`;
+    }
+  }
+
+  if (summaryTableBody) {
+    summaryTableBody.innerHTML = job.items.map((item) => {
+      const caseCode = item.report?.case_code || item.original_filename;
+      const outputFilename = item.output_filename || (item.state === "COMPLETE" ? `${caseCode}.pdf` : "Pending");
+      const isPersonal = item.case_type === "PERSONAL";
+      const classificationHtml = `<span class="badge-pill ${isPersonal ? "badge-pill-neutral" : "badge-pill-info"}">${isPersonal ? "Personal" : "Certified / Legal"}</span>`;
+
+      let layoutHtml = '<span class="badge-pill badge-pill-success"><i class="fa-solid fa-check"></i> Clean</span>';
+      if (item.layout_warnings && item.layout_warnings.length > 0) {
+        layoutHtml = `<span class="badge-pill badge-pill-warning" title="${escapeHtml(item.layout_warnings.join('; '))}"><i class="fa-solid fa-triangle-exclamation"></i> ${item.layout_warnings.length} Alert(s)</span>`;
+      }
+
+      let notionHtml = '<span class="badge-pill badge-pill-neutral">Not in DB</span>';
+      if (item.notion_verification?.has_notion_records) {
+        if (item.notion_verification.verified) {
+          notionHtml = '<span class="badge-pill badge-pill-success"><i class="fa-solid fa-cloud-check"></i> Verified</span>';
+        } else {
+          const discCount = item.notion_verification.discrepancies?.length || 1;
+          notionHtml = `<span class="badge-pill badge-pill-warning" title="${escapeHtml((item.notion_verification.discrepancies || []).join('; '))}"><i class="fa-solid fa-triangle-exclamation"></i> Discrepancy (${discCount})</span>`;
+        }
+      }
+
+      let notionAttachmentHtml = '<span class="badge-pill badge-pill-neutral">Not Uploaded</span>';
+      if (item.notion_upload_status === "UPLOADED") {
+        notionAttachmentHtml = '<span class="badge-pill badge-pill-success" title="Attached to Custody Pics in Notion"><i class="fa-solid fa-cloud-check"></i> Attached</span>';
+      } else if (item.notion_upload_status === "UPLOADING") {
+        notionAttachmentHtml = '<span class="badge-pill badge-pill-info"><i class="fa-solid fa-spinner fa-spin"></i> Uploading...</span>';
+      } else if (item.notion_upload_status === "FAILED") {
+        notionAttachmentHtml = `
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="badge-pill badge-pill-danger" title="${escapeHtml(item.notion_upload_error || 'Upload failed')}"><i class="fa-solid fa-circle-exclamation"></i> Failed</span>
+            <button type="button" class="button button-secondary single-upload-btn" data-item-id="${item.id}" style="padding: 2px 6px; font-size: 0.72rem; min-height: 24px;" title="Retry upload to Notion"><i class="fa-solid fa-rotate-right"></i> Retry</button>
+          </div>`;
+      } else if (item.state === "COMPLETE" && item.output_filename) {
+        notionAttachmentHtml = `
+          <button type="button" class="button button-secondary single-upload-btn" data-item-id="${item.id}" style="padding: 2px 8px; font-size: 0.75rem; min-height: 26px; background: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE;" title="Upload this report to Notion Custody Pics">
+            <i class="fa-solid fa-cloud-arrow-up"></i> Upload
+          </button>`;
+      }
+
+      let actionHtml = `<span class="status-chip ${statusClass(item.state)}">${escapeHtml(stateLabel(item.state))}</span>`;
+      if (job.download_ready && item.output_filename) {
+        actionHtml += ` <a href="/api/jobs/${job.id}/items/${item.id}/download" class="button button-secondary" style="padding: 4px 10px; font-size: 0.76rem; min-height: 28px;" download="${escapeHtml(item.output_filename)}"><i class="fa-solid fa-file-arrow-down"></i> PDF</a>`;
+      }
+
+      return `
+        <tr>
+          <td><strong>${escapeHtml(caseCode)}</strong><br><small style="color: var(--muted);">${escapeHtml(item.original_filename)}</small></td>
+          <td><code>${escapeHtml(outputFilename)}</code></td>
+          <td>${classificationHtml}</td>
+          <td>${layoutHtml}</td>
+          <td>${notionHtml}</td>
+          <td>${notionAttachmentHtml}</td>
+          <td><div style="display: flex; align-items: center; gap: 8px;">${actionHtml}</div></td>
+        </tr>`;
+    }).join("");
+  }
+
+  if (summaryDownloadBtn) {
+    if (job.download_ready) {
+      summaryDownloadBtn.classList.remove("is-hidden");
+      summaryDownloadBtn.href = `/api/jobs/${job.id}/download`;
+    } else {
+      summaryDownloadBtn.classList.add("is-hidden");
+    }
+  }
+
+  if (summarySyncNotionBtn) {
+    const hasCaseCodes = job.items.some((item) => item.report && item.report.case_code);
+    summarySyncNotionBtn.classList.toggle("is-hidden", !hasCaseCodes);
+  }
+
+  if (summaryUploadNotionBtn) {
+    const hasCompleted = job.items.some((item) => item.state === "COMPLETE" && item.output_filename);
+    summaryUploadNotionBtn.classList.toggle("is-hidden", !hasCompleted);
+  }
+}
+
+function showSummaryView() {
+  if (!state.job) return;
+  jobPanel.classList.add("is-hidden");
+  uploadPanel.classList.add("is-hidden");
+  if (summaryPanel) summaryPanel.classList.remove("is-hidden");
+  setWorkflowStep("download");
+  renderBatchSummary(state.job);
+}
+
+function showReviewView() {
+  if (!state.job) return;
+  if (summaryPanel) summaryPanel.classList.add("is-hidden");
+  uploadPanel.classList.add("is-hidden");
+  jobPanel.classList.remove("is-hidden");
+  setWorkflowStep("review");
+  renderJob();
 }
 
 async function syncNotionStatus(jobId) {
@@ -301,7 +663,121 @@ async function syncNotionStatus(jobId) {
   } finally {
     if (syncNotionButton) {
       syncNotionButton.disabled = false;
-      syncNotionButton.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Sync to Notion (Result Review)';
+      syncNotionButton.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Sync Status Only';
+    }
+  }
+}
+
+async function uploadBatchToNotion(jobId) {
+  if (!jobId) return;
+  if (summaryUploadNotionBtn) {
+    summaryUploadNotionBtn.disabled = true;
+    summaryUploadNotionBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading to Notion...';
+  }
+  if (uploadNotionButton) {
+    uploadNotionButton.disabled = true;
+    uploadNotionButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
+  }
+  if (notionSyncBanner) {
+    notionSyncBanner.className = "alert alert-info";
+    notionSyncBanner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading report PDFs directly to Notion <strong>Custody Pics</strong> &amp; setting status to <strong>Result Review</strong>...';
+    notionSyncBanner.classList.remove("is-hidden");
+  }
+
+  // Immediately reflect UPLOADING status on all eligible rows in the UI
+  if (state.job?.items) {
+    state.job.items.forEach((item) => {
+      if (item.state === "COMPLETE" && item.output_filename) {
+        item.notion_upload_status = "UPLOADING";
+      }
+    });
+    if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+      renderBatchSummary(state.job);
+    }
+  }
+
+  try {
+    const response = await api(`/api/jobs/${jobId}/upload-notion-reports`, { method: "POST" });
+    const result = await response.json();
+    const uploaded = result.uploaded ?? 0;
+    const failed = result.failed ?? 0;
+
+    await refreshJob();
+    if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+      renderBatchSummary(state.job);
+    }
+
+    if (uploaded > 0 && failed === 0) {
+      if (notionSyncBanner) {
+        notionSyncBanner.className = "alert alert-success";
+        notionSyncBanner.innerHTML = `<i class="fa-solid fa-circle-check"></i> Successfully attached <strong>${uploaded}</strong> report(s) to Notion (<strong>Custody Pics</strong>) and updated status to <strong>Result Review</strong>!`;
+        notionSyncBanner.classList.remove("is-hidden");
+      }
+      showAlert(`Successfully uploaded ${uploaded} report(s) directly to Notion ("Custody Pics")!`, "success");
+    } else if (uploaded > 0 && failed > 0) {
+      if (notionSyncBanner) {
+        notionSyncBanner.className = "alert alert-warning";
+        notionSyncBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Uploaded <strong>${uploaded}</strong> report(s) to Notion, but <strong>${failed}</strong> failed. Review individual items in summary table.`;
+        notionSyncBanner.classList.remove("is-hidden");
+      }
+      showAlert(`Uploaded ${uploaded} report(s) to Notion, but ${failed} failed.`, "warning");
+    } else {
+      if (notionSyncBanner) {
+        notionSyncBanner.className = "alert alert-danger";
+        notionSyncBanner.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> Failed to upload reports: ${escapeHtml(result.message || result.error || "Unknown error")}`;
+        notionSyncBanner.classList.remove("is-hidden");
+      }
+      showAlert(`Upload to Notion failed: ${result.message || result.error || "Unknown error"}`, "danger");
+    }
+  } catch (error) {
+    if (notionSyncBanner) {
+      notionSyncBanner.className = "alert alert-danger";
+      notionSyncBanner.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Notion upload failed: ${escapeHtml(error.message)}`;
+      notionSyncBanner.classList.remove("is-hidden");
+    }
+    showAlert(`Failed to upload reports to Notion: ${error.message}`, "danger");
+  } finally {
+    if (summaryUploadNotionBtn) {
+      summaryUploadNotionBtn.disabled = false;
+      summaryUploadNotionBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Upload Reports to Notion ("Custody Pics")';
+    }
+    if (uploadNotionButton) {
+      uploadNotionButton.disabled = false;
+      uploadNotionButton.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Upload Reports to Notion';
+    }
+  }
+}
+
+async function uploadSingleReportToNotion(jobId, itemId, buttonEl) {
+  if (!jobId || !itemId) return;
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+  }
+  const item = state.job?.items?.find((i) => i.id === itemId);
+  if (item) {
+    item.notion_upload_status = "UPLOADING";
+    if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+      renderBatchSummary(state.job);
+    }
+  }
+  try {
+    const response = await api(`/api/jobs/${jobId}/items/${itemId}/upload-notion-report`, { method: "POST" });
+    const result = await response.json();
+    if (result.success) {
+      showAlert(`Report attached to Notion ("Custody Pics") successfully.`, "success");
+    } else {
+      showAlert(`Upload failed: ${result.error || "Unknown error"}`, "danger");
+    }
+    await refreshJob();
+    if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+      renderBatchSummary(state.job);
+    }
+  } catch (error) {
+    showAlert(`Failed to upload report to Notion: ${error.message}`, "danger");
+    await refreshJob();
+    if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+      renderBatchSummary(state.job);
     }
   }
 }
@@ -309,13 +785,13 @@ async function syncNotionStatus(jobId) {
 function itemPayload() {
   const form = document.getElementById("item-form");
   const data = new FormData(form);
-  const participants = Array.from(form.querySelectorAll("tbody tr")).map((row) => ({
+  const participants = Array.from(form.querySelectorAll(".participant-table tbody tr")).map((row) => ({
     id: row.dataset.participantId,
-    source_order: Number(row.querySelector('[name="source_order"]').value),
-    sample_number: row.querySelector('[name="sample_number"]').value,
-    role: row.querySelector('[name="role"]').value,
-    full_name: row.querySelector('[name="full_name"]').value,
-    date_of_birth: row.querySelector('[name="date_of_birth"]').value,
+    source_order: Number(row.querySelector('[name="source_order"]')?.value ?? 0),
+    sample_number: row.querySelector('[name="sample_number"]')?.value ?? "",
+    role: row.querySelector('[name="role"]')?.value ?? "",
+    full_name: row.querySelector('[name="full_name"]')?.value ?? "",
+    date_of_birth: row.querySelector('[name="date_of_birth"]')?.value ?? "",
   }));
   return {
     case_type: data.get("case_type"),
@@ -351,7 +827,11 @@ async function refreshJob() {
   if (!state.job) return;
   const response = await api(`/api/jobs/${state.job.id}`);
   state.job = await response.json();
-  renderJob();
+  if (summaryPanel && !summaryPanel.classList.contains("is-hidden")) {
+    renderBatchSummary(state.job);
+  } else {
+    renderJob();
+  }
 }
 
 function startPolling() {
@@ -363,7 +843,22 @@ function startPolling() {
         state.syncedNotionJobs.add(state.job.id);
         syncNotionStatus(state.job.id);
       }
-      if (!["READY", "PROCESSING"].includes(state.job.state)) window.clearInterval(state.pollTimer);
+
+      const hasPendingNotionUploads = state.job?.items?.some((i) => i.notion_upload_status === "UPLOADING");
+
+      if (state.job?.state === "COMPLETE") {
+        if (summaryPanel && summaryPanel.classList.contains("is-hidden")) {
+          showSummaryView();
+        } else {
+          renderBatchSummary(state.job);
+        }
+        // ONLY stop polling if background Notion upload has also finished!
+        if (!hasPendingNotionUploads) {
+          window.clearInterval(state.pollTimer);
+        }
+      } else if (!["READY", "PROCESSING"].includes(state.job.state) && !hasPendingNotionUploads) {
+        window.clearInterval(state.pollTimer);
+      }
     } catch (error) {
       window.clearInterval(state.pollTimer);
       showAlert(error.message);
@@ -387,15 +882,6 @@ if (selectedFiles) {
   });
 }
 
-document.querySelectorAll('input[name="default_case_type"]').forEach((radio) => {
-  radio.addEventListener("change", () => {
-    if (selectedFiles) {
-      selectedFiles.querySelectorAll('select[name="case_types"]').forEach((select) => {
-        select.value = radio.value;
-      });
-    }
-  });
-});
 
 if (dropZone) {
   dropZone.addEventListener("dragover", (event) => {
@@ -427,36 +913,35 @@ if (uploadForm) {
       button.disabled = true;
       button.textContent = "Extracting…";
     }
+    showExtractionLoader();
 
     const labSourceRadio = document.querySelector('input[name="lab_source"]:checked');
     const reviewModeRadio = document.querySelector('input[name="review_mode"]:checked');
-    const defaultCaseTypeRadio = document.querySelector('input[name="default_case_type"]:checked');
+    const defaultCaseTypeInput = document.getElementById("upload-default-case-type");
 
     const formData = new FormData();
     formData.append("lab_source", labSourceRadio ? labSourceRadio.value : "EUROFINS");
     formData.append("review_mode", reviewModeRadio ? reviewModeRadio.value : "REVIEW");
-    formData.append("default_case_type", defaultCaseTypeRadio ? defaultCaseTypeRadio.value : "PERSONAL");
+    formData.append("default_case_type", defaultCaseTypeInput ? defaultCaseTypeInput.value : "PERSONAL");
+    formData.append("auto_upload_notion", autoUploadNotionCheckbox?.checked ? "true" : "false");
 
     for (const file of selectedFilesList) {
       formData.append("files", file);
     }
 
-    if (selectedFiles) {
-      const caseTypeSelects = selectedFiles.querySelectorAll('select[name="case_types"]');
-      caseTypeSelects.forEach((select) => {
-        formData.append("case_types", select.value);
-      });
-    }
 
     try {
       const response = await api("/api/jobs", { method: "POST", body: formData });
       state.job = await response.json();
       state.selectedItemId = state.job.items[0]?.id || null;
+      await finishExtractionLoader();
       renderJob();
       if (["READY", "PROCESSING"].includes(state.job.state)) startPolling();
     } catch (error) {
+      hideExtractionLoader();
       showAlert(error.message);
     } finally {
+      hideExtractionLoader();
       if (button) {
         button.disabled = false;
         button.textContent = "Extract reports";
@@ -500,6 +985,7 @@ if (newBatchBtn) {
     const modeRadio = document.querySelector(`input[name="review_mode"][value="${defaultReviewMode}"]`);
     if (modeRadio) modeRadio.checked = true;
     if (selectedFiles) selectedFiles.textContent = "";
+    if (summaryPanel) summaryPanel.classList.add("is-hidden");
     if (jobPanel) jobPanel.classList.add("is-hidden");
     if (uploadPanel) uploadPanel.classList.remove("is-hidden");
     setWorkflowStep("upload");
@@ -510,6 +996,70 @@ if (newBatchBtn) {
     }
   });
 }
+
+if (summaryBackReviewBtn) {
+  summaryBackReviewBtn.addEventListener("click", () => {
+    showReviewView();
+  });
+}
+
+if (summaryNewBatchBtn) {
+  summaryNewBatchBtn.addEventListener("click", () => {
+    if (newBatchBtn) newBatchBtn.click();
+  });
+}
+
+if (summarySyncNotionBtn) {
+  summarySyncNotionBtn.addEventListener("click", () => {
+    if (state.job?.id) {
+      syncNotionStatus(state.job.id);
+    }
+  });
+}
+
+if (summaryUploadNotionBtn) {
+  summaryUploadNotionBtn.addEventListener("click", () => {
+    if (state.job?.id) {
+      uploadBatchToNotion(state.job.id);
+    }
+  });
+}
+
+if (uploadNotionButton) {
+  uploadNotionButton.addEventListener("click", () => {
+    if (state.job?.id) {
+      uploadBatchToNotion(state.job.id);
+    }
+  });
+}
+
+if (summaryTableBody) {
+  summaryTableBody.addEventListener("click", async (event) => {
+    const btn = event.target.closest(".single-upload-btn");
+    if (!btn) return;
+    const itemId = btn.dataset.itemId;
+    if (itemId && state.job?.id) {
+      await uploadSingleReportToNotion(state.job.id, itemId, btn);
+    }
+  });
+}
+
+if (viewSummaryButton) {
+  viewSummaryButton.addEventListener("click", () => {
+    showSummaryView();
+  });
+}
+
+document.querySelectorAll(".stepper li").forEach((li) => {
+  li.addEventListener("click", () => {
+    const step = li.dataset.step;
+    if (step === "review" && state.job) {
+      showReviewView();
+    } else if (step === "download" && state.job && (state.job.state === "COMPLETE" || state.job.download_ready)) {
+      showSummaryView();
+    }
+  });
+});
 
 const openSettingsBtn = document.querySelector("[data-open-settings]");
 if (openSettingsBtn) {
@@ -522,24 +1072,31 @@ if (openSettingsBtn) {
 const savePageSettingsBtn = document.getElementById("save-page-settings-btn");
 if (savePageSettingsBtn) {
   savePageSettingsBtn.addEventListener("click", async () => {
-    const selected = document.querySelector('input[name="page_settings_review_mode"]:checked');
-    if (!selected) return;
+    const selectedReview = document.querySelector('input[name="page_settings_review_mode"]:checked');
+    const selectedCase = document.querySelector('input[name="page_settings_case_type"]:checked');
+    if (!selectedReview) return;
     savePageSettingsBtn.disabled = true;
     savePageSettingsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
     try {
+      const payload = {
+        default_review_mode: selectedReview.value,
+        default_case_type: selectedCase ? selectedCase.value : "PERSONAL",
+      };
       await api("/api/settings", {
         method: "PUT",
-        body: JSON.stringify({ default_review_mode: selected.value }),
+        body: JSON.stringify(payload),
       });
-      const modeRadio = document.querySelector(`input[name="review_mode"][value="${selected.value}"]`);
+      const modeRadio = document.querySelector(`input[name="review_mode"][value="${selectedReview.value}"]`);
       if (modeRadio) modeRadio.checked = true;
+      const hiddenDefault = document.getElementById("upload-default-case-type");
+      if (hiddenDefault && selectedCase) hiddenDefault.value = selectedCase.value;
       const indicator = document.getElementById("settings-save-indicator");
       if (indicator) {
         indicator.style.display = "inline-flex";
         setTimeout(() => { indicator.style.display = "none"; }, 3000);
       }
       if (typeof window.showToast === "function") {
-        window.showToast("Default operating mode saved successfully.", "success");
+        window.showToast("Default settings saved successfully.", "success");
       }
     } catch (error) {
       if (typeof window.showToast === "function") {
@@ -547,7 +1104,7 @@ if (savePageSettingsBtn) {
       }
     } finally {
       savePageSettingsBtn.disabled = false;
-      savePageSettingsBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Default Mode';
+      savePageSettingsBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Default Settings';
     }
   });
 }

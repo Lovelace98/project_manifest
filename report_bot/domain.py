@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -195,6 +196,13 @@ class JobItem(BaseModel):
     output_filename: str | None = None
     output_path: Path | None = None
     processing_error: str | None = None
+    layout_warnings: list[str] = Field(default_factory=list)
+    classification_info: dict[str, Any] = Field(default_factory=dict)
+    notion_verification: dict[str, Any] = Field(default_factory=dict)
+    needs_manual_review: bool = False
+    notion_page_id: str | None = None
+    notion_upload_status: str | None = None
+    notion_upload_error: str | None = None
 
 
 class JobRecord(BaseModel):
@@ -202,6 +210,7 @@ class JobRecord(BaseModel):
     lab_source: LabSource = LabSource.EUROFINS
     review_mode: ReviewMode
     default_case_type: CaseType
+    auto_upload_notion: bool = False
     state: JobState = JobState.UPLOADED
     items: list[JobItem] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -216,6 +225,7 @@ class JobRecord(BaseModel):
 
 class AppPreferences(BaseModel):
     default_review_mode: ReviewMode = ReviewMode.REVIEW
+    default_case_type: CaseType = CaseType.PERSONAL
 
 
 class ParticipantUpdate(BaseModel):

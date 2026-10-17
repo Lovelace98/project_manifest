@@ -51,13 +51,12 @@ class UFCParseError(Exception):
     """Raised when a UFC report cannot be parsed."""
 
 
-def _extract_order_id(page: fitz.Page, text: str) -> str:
+def _extract_order_id(page: fitz.Page, text: str, filename: str = "") -> str:
     match = ORDER_ID_RE.search(text)
     if match:
         return match.group(1).strip().upper()
 
-    # Fallback to searching text words in the Order ID region (bottom-up x:51, y:154)
-    # PyMuPDF coords: y in [600, 660], x in [45, 250]
+    # Fallback 1: search text words in the Order ID region (bottom-up x:51, y:154)
     words = page.get_text("words")
     candidate_words = [
         w for w in words if 605 <= w[1] <= 650 and w[0] < 220
@@ -68,6 +67,27 @@ def _extract_order_id(page: fitz.Page, text: str) -> str:
         match = ORDER_ID_RE.search(line_text)
         if match:
             return match.group(1).strip().upper()
+
+    # Fallback 2: Search anywhere on the page for a Blueprint Case Code pattern
+    bp_match = re.search(r"\b([A-Z0-9]+(?:-[A-Z0-9]+)*-\d{6}-\d{2,4})\b", text)
+    if bp_match:
+        return bp_match.group(1).strip().upper()
+
+    # Fallback 3: Check filename for a Blueprint Case Code pattern
+    if filename:
+        fn_match = re.search(r"([A-Z0-9]+(?:-[A-Z0-9]+)*-\d{6}-\d{2,4})", filename.upper())
+        if fn_match:
+            return fn_match.group(1).strip().upper()
+
+    # Fallback 4: Extract UFC Report ID (e.g. G34_0412-2) or filename stem so file can still be parsed and quarantined
+    report_id_match = re.search(r"Report\s+ID:\s*([A-Z0-9_]+-\d+)", text, re.IGNORECASE)
+    if report_id_match:
+        return report_id_match.group(1).strip().upper()
+
+    if filename:
+        stem = re.sub(r"\.pdf$", "", filename, flags=re.IGNORECASE).strip().upper()
+        if stem:
+            return stem
 
     raise UFCParseError("Could not find Blueprint Order ID in UFC report")
 
@@ -229,7 +249,7 @@ def parse_ufc_report(
         if not text.strip():
             raise UFCParseError("The PDF does not contain extractable text")
 
-        order_id = _extract_order_id(page, text)
+        order_id = _extract_order_id(page, text, filename)
         report_date = _extract_report_date(text)
         participants, collected_dates = _parse_participants(page)
         test_type = _infer_test_type(participants, text)

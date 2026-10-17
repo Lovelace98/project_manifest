@@ -216,7 +216,7 @@
                             <li class="is-current" data-step="upload"><span>1</span>Upload</li>
                             <li data-step="review"><span>2</span>Review</li>
                             <li data-step="process"><span>3</span>Process</li>
-                            <li data-step="download"><span>4</span>Download</li>
+                            <li data-step="download"><span>4</span>Summary &amp; Download</li>
                         </ol>
 
                         <div id="global-alert" class="alert is-hidden" role="status" aria-live="polite"></div>
@@ -245,7 +245,6 @@
                                             <input type="radio" name="lab_source" value="EUROFINS" checked>
                                             <span><strong>Eurofins</strong><small>Eurofins DNA reports.</small></span>
                                         </label>
-                                        <!-- UFC & Hong Kong Lab options commented out for phased rollout update
                                         <label class="choice-card">
                                             <input type="radio" name="lab_source" value="UFC">
                                             <span><strong>UFC</strong><small>Universal Forensics reports.</small></span>
@@ -254,7 +253,6 @@
                                             <input type="radio" name="lab_source" value="HONG_KONG">
                                             <span><strong>Hong Kong Lab</strong><small>Prenatal DNA reports (password only).</small></span>
                                         </label>
-                                        -->
                                     </fieldset>
                                     <fieldset>
                                         <legend>Operating mode</legend>
@@ -268,23 +266,17 @@
                                         </label>
                                     </fieldset>
                                     <fieldset>
-                                        <legend>Default report type</legend>
+                                        <legend>Notion Case Sync &amp; Attachment</legend>
                                         <label class="choice-card">
-                                            <input type="radio" name="default_case_type" value="PERSONAL" checked>
-                                            <span><strong>Personal</strong><small>Edited laboratory report only.</small></span>
-                                        </label>
-                                        <label class="choice-card">
-                                            <input type="radio" name="default_case_type" value="CERTIFIED_LEGAL">
-                                            <span><strong>Certified / Legal</strong><small>Add verification pages first.</small></span>
-                                        </label>
-                                    </fieldset>
-                                    <fieldset>
-                                        <legend>Notion Case Sync</legend>
-                                        <label class="choice-card" style="grid-column: span 2;">
                                             <input type="checkbox" id="auto-sync-notion" name="auto_sync_notion" checked>
                                             <span><strong>Auto-Update Notion Status</strong><small>Switch matched cases to "Result Review" in Notion upon completion.</small></span>
                                         </label>
+                                        <label class="choice-card">
+                                            <input type="checkbox" id="auto-upload-notion" name="auto_upload_notion">
+                                            <span><strong>Auto-Upload Reports to Notion</strong><small>Automatically attach finalized PDFs to "Custody Pics" in Notion upon completion.</small></span>
+                                        </label>
                                     </fieldset>
+                                    <input type="hidden" id="upload-default-case-type" name="default_case_type" value="{{ default_case_type or 'PERSONAL' }}">
                                 </div>
                                 <div class="panel-actions">
                                     <p>Only text-native PDF reports are supported.</p>
@@ -321,11 +313,100 @@
                                 <p id="batch-expiry">Files expire one hour after upload.</p>
                                 <div class="button-row">
                                     <button id="new-batch-button" class="button button-secondary" type="button">New batch</button>
+                                    <button id="upload-notion-button" class="button button-secondary is-hidden" type="button" style="background: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE; font-weight: 600;">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload Reports to Notion
+                                    </button>
                                     <button id="sync-notion-button" class="button button-secondary is-hidden" type="button" style="background: #E0F2FE; color: #0369A1; border: 1px solid #BAE6FD; font-weight: 600;">
-                                        <i class="fa-solid fa-cloud-arrow-up"></i> Sync to Notion (Result Review)
+                                        <i class="fa-solid fa-arrows-rotate"></i> Sync Status Only
                                     </button>
                                     <button id="process-button" class="button button-primary" type="button" disabled>Process approved</button>
+                                    <button id="view-summary-button" class="button button-secondary is-hidden" type="button">
+                                        <i class="fa-solid fa-chart-simple"></i> View Summary
+                                    </button>
                                     <a id="download-button" class="button button-success is-hidden" href="#">Download ZIP</a>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- =========================================================
+                             BATCH SUMMARY & AUDIT DASHBOARD PANEL (Step 4)
+                             ========================================================= -->
+                        <section id="summary-panel" class="panel is-hidden" aria-labelledby="summary-title">
+                            <div class="panel-heading">
+                                <div>
+                                    <p class="eyebrow">BATCH COMPLETION &amp; AUDIT</p>
+                                    <h2 id="summary-title">Batch Processing Summary</h2>
+                                </div>
+                                <span id="summary-badge" class="status-chip status-success">ALL COMPLETED</span>
+                            </div>
+
+                            <!-- Executive Metric Counters -->
+                            <div class="summary-metrics-grid">
+                                <div class="metric-card">
+                                    <div class="metric-icon metric-icon-total"><i class="fa-solid fa-file-pdf"></i></div>
+                                    <div class="metric-data">
+                                        <span class="metric-value" id="summary-total-count">0</span>
+                                        <span class="metric-label">Total Reports</span>
+                                    </div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-icon metric-icon-clean"><i class="fa-solid fa-circle-check"></i></div>
+                                    <div class="metric-data">
+                                        <span class="metric-value" id="summary-clean-count">0</span>
+                                        <span class="metric-label">Clean &amp; Verified</span>
+                                    </div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-icon metric-icon-warning"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                                    <div class="metric-data">
+                                        <span class="metric-value" id="summary-flagged-count">0</span>
+                                        <span class="metric-label">Flagged for Review</span>
+                                    </div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-icon metric-icon-notion"><i class="fa-solid fa-cloud"></i></div>
+                                    <div class="metric-data">
+                                        <span class="metric-value" id="summary-notion-count">0</span>
+                                        <span class="metric-label">Notion Discrepancies</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Audit Table of All Cases in Batch -->
+                            <div class="table-scroll" style="margin: 20px 0 10px;">
+                                <table class="participant-table summary-table">
+                                    <thead>
+                                        <tr>
+                                            <th>CASE REFERENCE</th>
+                                            <th>OUTPUT FILE</th>
+                                            <th>CLASSIFICATION</th>
+                                            <th>LAYOUT INTEGRITY</th>
+                                            <th>NOTION CHECK</th>
+                                            <th>NOTION ATTACHMENT</th>
+                                            <th>STATUS / DOWNLOAD</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="summary-table-body">
+                                        <!-- Dynamically generated rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="panel-actions" style="margin-top: 20px;">
+                                <button id="summary-back-review-btn" class="button button-secondary" type="button">
+                                    <i class="fa-solid fa-arrow-left"></i> Back to Review
+                                </button>
+                                <div class="button-row">
+                                    <button id="summary-new-batch-btn" class="button button-secondary" type="button">New Batch</button>
+                                    <button id="summary-upload-notion-btn" class="button button-primary" type="button" style="background: #2563EB; color: #FFFFFF; font-weight: 600;">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload Reports to Notion ("Custody Pics")
+                                    </button>
+                                    <button id="summary-sync-notion-btn" class="button button-secondary" type="button" style="background: #E0F2FE; color: #0369A1; border: 1px solid #BAE6FD; font-weight: 600;">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Sync Status Only
+                                    </button>
+                                    <a id="summary-download-btn" class="button button-success" href="#">
+                                        <i class="fa-solid fa-download"></i> Download Batch ZIP
+                                    </a>
                                 </div>
                             </div>
                         </section>
@@ -373,6 +454,28 @@
                                         </span>
                                     </label>
                                 </div>
+                                <div style="margin-top: 20px; border-top: 1px solid var(--brand-border); padding-top: 18px; margin-bottom: 20px;">
+                                    <div style="margin-bottom: 12px;">
+                                        <h4 style="font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 700; color: var(--brand-text); margin-bottom: 2px;">Fallback Report Type</h4>
+                                        <p style="font-size: 0.85rem; color: var(--brand-text-muted);">Applied as a fallback only when a report has an unrecognized case code prefix and is not found in Notion.</p>
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
+                                        <label class="choice-card" style="margin-top: 0;">
+                                            <input type="radio" name="page_settings_case_type" value="PERSONAL" {{ 'checked' if default_case_type == 'PERSONAL' else '' }}>
+                                            <span>
+                                                <strong>Personal (Default)</strong>
+                                                <small>Edited laboratory report only.</small>
+                                            </span>
+                                        </label>
+                                        <label class="choice-card" style="margin-top: 0;">
+                                            <input type="radio" name="page_settings_case_type" value="CERTIFIED_LEGAL" {{ 'checked' if default_case_type == 'CERTIFIED_LEGAL' else '' }}>
+                                            <span>
+                                                <strong>Certified / Legal</strong>
+                                                <small>Prepend legal verification pages.</small>
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
 
                                 <div style="background: #F8FAFC; border: 1px solid var(--brand-border); border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 24px; font-size: 0.85rem; color: var(--brand-text-muted);">
                                     <div><strong style="color: var(--brand-text);"><i class="fa-solid fa-flask" style="color: var(--brand-primary); margin-right: 4px;"></i> Active Source:</strong> Eurofins</div>
@@ -385,7 +488,7 @@
                                         <i class="fa-solid fa-check"></i> Saved
                                     </span>
                                     <button id="save-page-settings-btn" class="btn btn-primary" type="button" style="min-height: 42px; padding: 8px 24px; font-size: 0.92rem; font-weight: 600;">
-                                        <i class="fa-solid fa-floppy-disk"></i> Save Default Mode
+                                        <i class="fa-solid fa-floppy-disk"></i> Save Default Settings
                                     </button>
                                 </div>
                             </form>
@@ -430,6 +533,26 @@
             </div>
             <h3 id="loader-title">Processing data...</h3>
             <p id="loader-desc">Analyzing participants and formatting manifest records.</p>
+            
+            <!-- Dynamic Extraction Steps Animation -->
+            <div id="extraction-stepper" class="extraction-stepper" style="display: none;">
+                <div class="extract-step is-active" id="step-extract">
+                    <span class="step-bullet"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+                    <span class="step-text">Extracting laboratory text &amp; participant tables</span>
+                </div>
+                <div class="extract-step is-pending" id="step-layout">
+                    <span class="step-bullet"><i class="fa-regular fa-circle"></i></span>
+                    <span class="step-text">Auditing visual layout geometry &amp; anchors</span>
+                </div>
+                <div class="extract-step is-pending" id="step-notion">
+                    <span class="step-bullet"><i class="fa-regular fa-circle"></i></span>
+                    <span class="step-text">Cross-referencing Notion Participant &amp; Case DBs</span>
+                </div>
+                <div class="extract-step is-pending" id="step-classify">
+                    <span class="step-bullet"><i class="fa-regular fa-circle"></i></span>
+                    <span class="step-text">Auto-classifying report types with "AND" confirmation</span>
+                </div>
+            </div>
         </div>
     </div>
 
