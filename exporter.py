@@ -1,6 +1,7 @@
 import re
 import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side
+from notion_service import sort_manifest_cases
 
 def sanitize_sheet_title(title):
     """Sanitize sheet title for Excel (max 30 characters, no invalid chars)."""
@@ -11,7 +12,7 @@ def sanitize_sheet_title(title):
     # Truncate to 30 chars
     return sanitized[:30]
 
-def create_excel_manifest(cases, output_path):
+def create_excel_manifest(cases, output_path, auto_sort=False):
     wb = openpyxl.Workbook()
     # Remove default sheet
     default_sheet = wb.active
@@ -32,7 +33,8 @@ def create_excel_manifest(cases, output_path):
         bottom=thin_border_side
     )
     
-    for c_idx, case in enumerate(cases):
+    cases_to_export = sort_manifest_cases(cases, ascending=True) if auto_sort else cases
+    for c_idx, case in enumerate(cases_to_export):
         # Determine unique sheet name
         bdo_tag = case.get('bdo_tag', f"CASE-{c_idx+1}")
         sheet_title = sanitize_sheet_title(bdo_tag)

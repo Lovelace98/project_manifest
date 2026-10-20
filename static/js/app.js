@@ -5,6 +5,7 @@
 let allCases = [];
 let cases = [];
 let currentLabFilter = 'ALL';
+let currentSortMode = 'date-asc';
 let docxRowCount = 0;
 
 // DOM Elements
@@ -18,6 +19,7 @@ const fetchNotionBtn = document.getElementById('fetch-notion-btn');
 const forceFetchNotionBtn = document.getElementById('force-fetch-notion-btn');
 const notionStatusIndicator = document.getElementById('notion-status-indicator');
 const labFilterSelect = document.getElementById('lab-filter-select');
+const sortSelect = document.getElementById('sort-select');
 const autoDispatchLabel = document.getElementById('auto-dispatch-label');
 const autoDispatchCheckbox = document.getElementById('auto-dispatch-checkbox');
 
@@ -108,7 +110,7 @@ function fetchNotionData(forceRefresh = false) {
         return response.json();
     })
     .then(data => {
-        allCases = data.cases || [];
+        allCases = sortCases(data.cases || [], currentSortMode);
         docxRowCount = 0;
 
         if (allCases.length === 0) {
@@ -182,13 +184,114 @@ if (labFilterSelect) {
 
 function filterCasesByLab(lab) {
     currentLabFilter = lab;
-    if (lab === 'ALL') {
-        cases = [...allCases];
-    } else {
-        cases = allCases.filter(c => (c.receiving_lab || '').toUpperCase() === lab.toUpperCase());
-    }
+    const baseList = (lab === 'ALL')
+        ? [...allCases]
+        : allCases.filter(c => (c.receiving_lab || '').toUpperCase() === lab.toUpperCase());
+    cases = sortCases(baseList, currentSortMode);
     renderCards();
     showToast(`Displaying ${cases.length} case(s) for ${lab === 'ALL' ? 'All Labs' : lab}`, 'info');
+}
+
+/* -------------------------------------------------------------
+ * Case Sorting (Date Ascending / Descending / Reference)
+ * ------------------------------------------------------------- */
+
+function extractCaseDateAndSeq(tag) {
+    if (!tag) return { dateVal: Infinity, seqNum: 999999, tag: '' };
+    const str = String(tag).trim().toUpperCase();
+    const parts = str.split('-');
+    let parsedDate = null;
+    let dateIdx = -1;
+
+    for (let i = 0; i < parts.length; i++) {
+        const p = parts[i];
+        if (p.length === 6 && /^\d{6}$/.test(p)) {
+            const dd = parseInt(p.slice(0, 2), 10);
+            const mm = parseInt(p.slice(2, 4), 10);
+            const yy = parseInt(p.slice(4), 10);
+            const fullYear = yy < 70 ? 2000 + yy : 1900 + yy;
+            const dObj = new Date(fullYear, mm - 1, dd);
+            if (
+                dObj.getFullYear() === fullYear &&
+                dObj.getMonth() === mm - 1 &&
+                dObj.getDate() === dd
+            ) {
+                parsedDate = dObj.getTime();
+                dateIdx = i;
+                break;
+            }
+        }
+    }
+
+    if (parsedDate === null) {
+        const match = str.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+        if (match) {
+            const dd = parseInt(match[1], 10);
+            const mm = parseInt(match[2], 10);
+            const yy = parseInt(match[3], 10);
+            const fullYear = yy < 70 ? 2000 + yy : 1900 + yy;
+            const dObj = new Date(fullYear, mm - 1, dd);
+            if (
+                dObj.getFullYear() === fullYear &&
+                dObj.getMonth() === mm - 1 &&
+                dObj.getDate() === dd
+            ) {
+                parsedDate = dObj.getTime();
+            }
+        }
+    }
+
+    let seqNum = 999999;
+    if (dateIdx !== -1 && dateIdx + 1 < parts.length) {
+        const seqMatch = parts[dateIdx + 1].match(/\d+/);
+        if (seqMatch) {
+            seqNum = parseInt(seqMatch[0], 10);
+        }
+    }
+    if (seqNum === 999999) {
+        const allNums = str.match(/\d+/g);
+        if (allNums && allNums.length > 0) {
+            seqNum = parseInt(allNums[allNums.length - 1], 10);
+        }
+    }
+
+    return {
+        dateVal: parsedDate !== null ? parsedDate : Infinity,
+        seqNum: seqNum,
+        tag: str
+    };
+}
+
+function sortCases(casesList, sortMode = 'date-asc') {
+    return [...casesList].sort((a, b) => {
+        const infoA = extractCaseDateAndSeq(a.bdo_tag || a.case_code || '');
+        const infoB = extractCaseDateAndSeq(b.bdo_tag || b.case_code || '');
+
+        if (sortMode === 'date-asc') {
+            if (infoA.dateVal !== infoB.dateVal) return infoA.dateVal - infoB.dateVal;
+            if (infoA.seqNum !== infoB.seqNum) return infoA.seqNum - infoB.seqNum;
+            return infoA.tag.localeCompare(infoB.tag);
+        } else if (sortMode === 'date-desc') {
+            if (infoA.dateVal !== infoB.dateVal) return infoB.dateVal - infoA.dateVal;
+            if (infoA.seqNum !== infoB.seqNum) return infoB.seqNum - infoA.seqNum;
+            return infoB.tag.localeCompare(infoA.tag);
+        } else if (sortMode === 'tag-asc') {
+            return (a.bdo_tag || a.case_code || '').localeCompare(b.bdo_tag || b.case_code || '');
+        } else if (sortMode === 'tag-desc') {
+            return (b.bdo_tag || b.case_code || '').localeCompare(a.bdo_tag || a.case_code || '');
+        }
+        return 0;
+    });
+}
+
+if (sortSelect) {
+    sortSelect.addEventListener('change', (e) => {
+        currentSortMode = e.target.value;
+        cases = sortCases(cases, currentSortMode);
+        renderCards();
+        const label = e.target.options[e.target.selectedIndex].text;
+        showToast(`Manifest sorted by: ${label}`, 'info');
+    });
 }
 
 /* -------------------------------------------------------------
@@ -252,7 +355,7 @@ function handleFileSelect(file) {
         return response.json();
     })
     .then(data => {
-        allCases = data.cases || [];
+        allCases = sortCases(data.cases || [], currentSortMode);
         docxRowCount = data.docx_rows || 0;
         cases = [...allCases];
 
@@ -726,5 +829,7 @@ window.updateStatus = updateStatus;
 window.fetchNotionData = fetchNotionData;
 window.filterCasesByLab = filterCasesByLab;
 window.renderCards = renderCards;
+window.extractCaseDateAndSeq = extractCaseDateAndSeq;
+window.sortCases = sortCases;
 
 })();

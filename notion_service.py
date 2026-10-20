@@ -5,6 +5,7 @@ import logging
 import random
 import threading
 import concurrent.futures
+from datetime import datetime, date
 import httpx
 from dotenv import load_dotenv
 
@@ -458,7 +459,81 @@ def merge_multipart_cases(processed_rows, default_test_type="PRIVATE PATERNITY")
             "case_page_ids": case_page_ids
         })
         
-    return consolidated_cases
+    return sort_manifest_cases(consolidated_cases, ascending=True)
+
+def extract_case_date_and_seq(case_tag: str):
+    """
+    Extracts the collection date (DDMMYY) and sequence number from a case reference tag.
+    Returns: (parsed_date: date | None, seq_num: int, tag: str)
+    Handles patterns such as:
+      - 'CD-OMC-260526-001' -> (date(2026, 5, 26), 1, 'CD-OMC-260526-001')
+      - 'CD-BDO-HOM-031026-01' -> (date(2026, 10, 3), 1, ...)
+      - 'X-101026-X' -> (date(2026, 10, 10), 999999, ...)
+      - 'BDO-HOM-291025-001' -> (date(2025, 10, 29), 1, ...)
+      - 'PENDING-PL-58' -> (None, 58, ...)
+    """
+    if not case_tag:
+        return (None, 999999, "")
+    tag = str(case_tag).strip().upper()
+    parts = tag.split("-")
+    parsed_date = None
+    date_idx = -1
+
+    for i, p in enumerate(parts):
+        if len(p) == 6 and p.isdigit():
+            dd, mm, yy = int(p[:2]), int(p[2:4]), int(p[4:])
+            full_year = 2000 + yy if yy < 70 else 1900 + yy
+            try:
+                parsed_date = date(full_year, mm, dd)
+                date_idx = i
+                break
+            except ValueError:
+                pass
+
+    if not parsed_date:
+        match = re.search(r"\b(\d{2})(\d{2})(\d{2})\b", tag)
+        if match:
+            dd, mm, yy = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            full_year = 2000 + yy if yy < 70 else 1900 + yy
+            try:
+                parsed_date = date(full_year, mm, dd)
+            except ValueError:
+                parsed_date = None
+
+    seq_num = 999999
+    if date_idx != -1 and date_idx + 1 < len(parts):
+        seq_match = re.search(r"\d+", parts[date_idx + 1])
+        if seq_match:
+            seq_num = int(seq_match.group(0))
+    if seq_num == 999999:
+        last_num = re.search(r"(\d+)(?!.*\d)", tag)
+        if last_num:
+            seq_num = int(last_num.group(1))
+
+    return (parsed_date, seq_num, tag)
+
+def sort_manifest_cases(cases: list[dict], ascending: bool = True, sort_by: str = "date") -> list[dict]:
+    """
+    Sorts a list of manifest case dictionaries.
+    sort_by:
+      - 'date': sorts chronologically by reference date, then sequence number, then tag string.
+      - 'tag': sorts alphabetically by bdo_tag / case code.
+    """
+    if sort_by == "tag":
+        return sorted(
+            cases,
+            key=lambda c: str(c.get("bdo_tag") or c.get("case_code") or "").upper(),
+            reverse=not ascending,
+        )
+
+    def _sort_key(c):
+        tag = c.get("bdo_tag") or c.get("case_code") or c.get("entry_id") or ""
+        d, s, t = extract_case_date_and_seq(tag)
+        has_date = 0 if d is not None else 1
+        d_val = d or (date.max if ascending else date.min)
+        return (has_date, d_val, s, t)
+
+    return sorted(cases, key=_sort_key, reverse=not ascending)
 
 def query_notion_database(api_key=None, database_id=None, filter_mode="manifest_batch"):
     """

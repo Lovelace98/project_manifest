@@ -234,7 +234,7 @@ def parse_docx(file_path):
                         special_requests_val = status_clean
                 
                 # Ensure parents always precede children: Father -> Mother -> Children
-                from notion_service import get_role_sort_rank
+                from notion_service import get_role_sort_rank, sort_manifest_cases
                 sorted_parts = sorted(parsed_parts, key=lambda p: get_role_sort_rank(p.get('role')))
 
                 cases.append({
@@ -246,7 +246,7 @@ def parse_docx(file_path):
                 })
                 
     return {
-        'cases': cases,
+        'cases': sort_manifest_cases(cases, ascending=True),
         'row_count': row_count
     }
 
