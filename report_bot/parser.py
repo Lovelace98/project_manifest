@@ -34,6 +34,9 @@ KNOWN_TEST_TYPES = (
     ("TWIN", "ZYGOSITY"),
     ("PATERNITY", "PATERNITY"),
     ("MATERNITY", "MATERNITY"),
+    ("PERSONAL TEST", "SINGLE PROFILE"),
+    ("SINGLE PROFILE", "SINGLE PROFILE"),
+    ("DNA PROFILE", "SINGLE PROFILE"),
 )
 
 
@@ -95,13 +98,13 @@ def _report_date(words: list[Word]):
     return None
 
 
-def _find_header(words: list[Word]) -> tuple[Word, Word, Word, Word]:
+def _find_header(words: list[Word]) -> tuple[Word, Word | None, Word, Word]:
     for sample in (word for word in words if word.text.upper() == "SAMPLE"):
         same_line = [word for word in words if abs(word.y0 - sample.y0) <= 3]
         role = next((word for word in same_line if word.text.upper() == "ROLE"), None)
         name = next((word for word in same_line if word.text.upper() == "NAME"), None)
         date = next((word for word in same_line if word.text.upper() == "DATE"), None)
-        if role and name and date:
+        if name and date:
             return sample, role, name, date
     raise ReportParseError("Participant table header was not found")
 
@@ -132,10 +135,14 @@ def _parse_participants(words: list[Word]) -> list[Participant]:
     participants: list[Participant] = []
     for row in _group_rows(words, sample_header.y1, table_end):
         row = sorted(row, key=lambda word: word.x0)
-        sample = " ".join(word.text for word in row if word.x0 < role_header.x0).strip()
-        role = " ".join(
-            word.text for word in row if role_header.x0 <= word.x0 < name_header.x0
-        ).strip()
+        if role_header:
+            sample = " ".join(word.text for word in row if word.x0 < role_header.x0).strip()
+            role = " ".join(
+                word.text for word in row if role_header.x0 <= word.x0 < name_header.x0
+            ).strip()
+        else:
+            sample = " ".join(word.text for word in row if word.x0 < name_header.x0).strip()
+            role = "PARTICIPANT"
         name = " ".join(
             word.text for word in row if name_header.x0 <= word.x0 < date_header.x0
         ).strip()
@@ -154,7 +161,7 @@ def _parse_participants(words: list[Word]) -> list[Participant]:
                     source_order=len(participants),
                 )
             )
-        elif participants and not sample and not role and not dob and name:
+        elif participants and not sample and not (role if role_header else False) and not dob and name:
             last = participants[-1]
             existing_name = last.full_name.strip()
             continuation_name = name.strip()
@@ -190,10 +197,35 @@ def _parse_document_participants(document: fitz.Document) -> list[Participant]:
             if participant.sample_number in seen_samples:
                 continue
             seen_samples.add(participant.sample_number)
+
+            # Deduplicate duplicate swab rows for the same tested person (same name and DOB)
+            matching_existing = next(
+                (
+                    existing
+                    for existing in participants
+                    if existing.full_name.strip().upper() == participant.full_name.strip().upper()
+                    and existing.date_of_birth == participant.date_of_birth
+                ),
+                None,
+            )
+            if matching_existing:
+                combined_samples = f"{matching_existing.sample_number}, {participant.sample_number}"
+                if len(combined_samples) <= 64:
+                    idx = participants.index(matching_existing)
+                    participants[idx] = Participant(
+                        id=matching_existing.id,
+                        sample_number=combined_samples,
+                        role=matching_existing.role,
+                        full_name=matching_existing.full_name,
+                        date_of_birth=matching_existing.date_of_birth,
+                        source_order=matching_existing.source_order,
+                    )
+                    continue
+
             participant.source_order = len(participants)
             participants.append(participant)
-    if len(participants) < 2:
-        raise ReportParseError("At least two participant rows are required")
+    if len(participants) < 1:
+        raise ReportParseError("At least one participant row is required")
     if len(participants) > 60:
         raise ReportParseError("Report exceeds the 60-participant limit")
     return participants
@@ -214,6 +246,8 @@ def _infer_test_type(
     if first_page_words:
         title_candidates = [w for w in first_page_words if 110 <= w.y0 <= 200]
         title_line = " ".join(w.text.upper() for w in title_candidates)
+        if "PERSONAL TEST" in title_line or "SINGLE PROFILE" in title_line:
+            return "SINGLE PROFILE", True
         if "MATERNITY" in title_line:
             return "MATERNITY", True
         if "PATERNITY" in title_line and not (has_alleged_mother and not has_alleged_father):
@@ -236,6 +270,12 @@ def _infer_test_type(
             return "ZYGOSITY", True
 
     # 2. Strict participant role verification
+    if any(p.role.upper() in ("PARTICIPANT", "INDIVIDUAL") for p in participants) and not (
+        has_alleged_mother or has_alleged_father
+    ):
+        upper = " ".join(text.upper().split())
+        if "PERSONAL TEST" in upper or "SINGLE PROFILE" in upper:
+            return "SINGLE PROFILE", True
     if has_alleged_mother and not has_alleged_father:
         return "MATERNITY", False
     if has_alleged_father and not has_alleged_mother:
@@ -310,6 +350,16 @@ def parse_eurofins_report(
         test_type, explicit_test_type = _infer_test_type(
             full_text, participants, first_page_words
         )
+
+        min_participants = (
+            1
+            if any(t in test_type.upper() for t in ("GENDER", "SEX", "PROFILE", "PERSONAL"))
+            else 2
+        )
+        if len(participants) < min_participants:
+            raise ReportParseError(
+                f"At least {min_participants} participant row{'s are' if min_participants > 1 else ' is'} required"
+            )
 
         if not explicit_test_type:
             warnings.append("Test type was inferred from participant roles")

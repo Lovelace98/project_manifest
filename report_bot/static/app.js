@@ -124,6 +124,7 @@ function reportWarnings(item) {
 function typeOptions(current) {
   const options = [
     "PATERNITY",
+    "SINGLE PROFILE",
     "PRENATAL PATERNITY",
     "PRENATAL GENDER",
     "GENDER",

@@ -146,7 +146,11 @@ def _validation_errors(report: ReportData) -> list[str]:
 
     if not report.test_type.strip():
         errors.append("Test type is required")
-    min_participants = 1 if any(t in report.test_type.upper() for t in ("GENDER", "SEX")) else 2
+    min_participants = (
+        1
+        if any(t in report.test_type.upper() for t in ("GENDER", "SEX", "PROFILE", "PERSONAL"))
+        else 2
+    )
     if len(report.participants) < min_participants:
         errors.append(
             f"At least {min_participants} participant{'s are' if min_participants > 1 else ' is'} required"

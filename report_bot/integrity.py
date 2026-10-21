@@ -492,7 +492,13 @@ def cross_verify_participants(
             # Check Role
             ext_role_norm = ext.role.upper().replace("ALLEGED ", "").strip()
             notion_role_norm = str(n_part.get("role", "")).upper().replace("ALLEGED ", "").strip()
-            role_match = (ext_role_norm == notion_role_norm) or (not ext_role_norm) or (not notion_role_norm)
+            role_match = (
+                (ext_role_norm == notion_role_norm)
+                or (not ext_role_norm)
+                or (not notion_role_norm)
+                or (ext_role_norm in ("PARTICIPANT", "INDIVIDUAL", "SELF"))
+                or (notion_role_norm in ("PARTICIPANT", "INDIVIDUAL", "SELF"))
+            )
             if not role_match:
                 discrepancies.append(
                     f"Role discrepancy for {ext.full_name}: PDF lists '{ext.role}', Notion records '{n_part.get('role')}'."

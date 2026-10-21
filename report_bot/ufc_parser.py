@@ -215,8 +215,8 @@ def _parse_participants(page: fitz.Page) -> tuple[list[Participant], list[date]]
             )
         )
 
-    if len(participants) < 2:
-        raise UFCParseError(f"Found {len(participants)} participants; expected at least 2")
+    if len(participants) < 1:
+        raise UFCParseError("Found 0 participants; expected at least 1")
 
     return participants, collected_dates
 
@@ -253,6 +253,10 @@ def parse_ufc_report(
         report_date = _extract_report_date(text)
         participants, collected_dates = _parse_participants(page)
         test_type = _infer_test_type(participants, text)
+
+        min_expected = 1 if any(t in test_type.upper() for t in ("GENDER", "SEX", "PROFILE", "PERSONAL")) else 2
+        if len(participants) < min_expected:
+            raise UFCParseError(f"Found {len(participants)} participants; expected at least {min_expected}")
 
         # Derive collection date from Order ID date segment (DDMMYY)
         # or fallback to collected dates from table

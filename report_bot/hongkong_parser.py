@@ -188,8 +188,8 @@ def _parse_participants(page: fitz.Page, test_type: str) -> list[Participant]:
             )
         )
 
-    is_gender = any(t in test_type.upper() for t in ("GENDER", "SEX"))
-    min_expected = 1 if is_gender else 2
+    is_single = any(t in test_type.upper() for t in ("GENDER", "SEX", "PROFILE", "PERSONAL"))
+    min_expected = 1 if is_single else 2
     if len(participants) < min_expected:
         raise HongKongParseError(
             f"Found {len(participants)} participants; expected at least {min_expected}"

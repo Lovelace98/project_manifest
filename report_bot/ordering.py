@@ -101,7 +101,16 @@ def participant_priority(test_type: str, role: str) -> int:
             return 3
     elif any(
         token in test
-        for token in ("SIBLING", "Y-CHROMOSOME", "ZYGOSITY", "MITOCHONDRIAL", "GENDER", "SEX")
+        for token in (
+            "SIBLING",
+            "Y-CHROMOSOME",
+            "ZYGOSITY",
+            "MITOCHONDRIAL",
+            "GENDER",
+            "SEX",
+            "PROFILE",
+            "PERSONAL",
+        )
     ):
         return 0
 
@@ -146,6 +155,8 @@ def role_combination_warnings(
         "PRENATAL" not in test_type.upper()
         and "GENDER" not in test_type.upper()
         and "SEX" not in test_type.upper()
+        and "PROFILE" not in test_type.upper()
+        and "PERSONAL" not in test_type.upper()
         and not any(
             _is_child_for_test(test_type, participant.role) for participant in participants
         )
