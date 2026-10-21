@@ -235,20 +235,26 @@ def extract_prop_rollup_status(prop):
         rtype = r.get("type")
         if rtype == "array":
             items = r.get("array", [])
+            names: list[str] = []
             for item in items:
                 itype = item.get("type")
                 if itype == "select":
                     name = item.get("select", {}).get("name", "")
                     if name:
-                        return name.strip()
+                        names.append(name.strip())
                 elif itype == "status":
                     name = item.get("status", {}).get("name", "")
                     if name:
-                        return name.strip()
+                        names.append(name.strip())
                 elif itype == "rich_text":
                     txt = "".join([t.get("plain_text", "") for t in item.get("rich_text", [])])
                     if txt:
-                        return txt.strip()
+                        names.append(txt.strip())
+            if names:
+                # If there are multiple rolled-up statuses and any is non-'Manifest Awaiting' (e.g. 'Result Delivered'),
+                # prioritize the non-'Manifest Awaiting' status so downstream can identify completed/dispatched cases
+                non_awaiting = [n for n in names if n != "Manifest Awaiting"]
+                return non_awaiting[0] if non_awaiting else names[0]
         elif rtype == "string":
             return r.get("string", "").strip()
     elif ptype == "select":
@@ -560,7 +566,7 @@ def query_notion_database(api_key=None, database_id=None, filter_mode="manifest_
         payload["filter"] = {
             "property": "Case Status",
             "rollup": {
-                "any": {
+                "every": {
                     "select": {
                         "equals": "Manifest Awaiting"
                     }
@@ -621,6 +627,11 @@ def fetch_manifest_cases(api_key=None, database_id=None, filter_mode="manifest_b
         raw_pages = query_notion_database(api_key=api_key, database_id=database_id, filter_mode=filter_mode)
         processed_rows = [process_raw_page(p) for p in raw_pages]
         consolidated = merge_multipart_cases(processed_rows)
+        if filter_mode == "manifest_batch":
+            consolidated = [
+                c for c in consolidated
+                if c.get("case_status") == "Manifest Awaiting"
+            ]
         _manifest_cache = {
             "data": consolidated,
             "timestamp": now,

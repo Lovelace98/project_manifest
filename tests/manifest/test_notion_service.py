@@ -234,6 +234,31 @@ def test_extract_prop_rollup_status():
     }
     assert extract_prop_rollup_status(prop_status) == "Dispatched to Laboratory"
 
+    # Multiple statuses in rollup: prioritize non-'Manifest Awaiting'
+    prop_mixed = {
+        "type": "rollup",
+        "rollup": {
+            "type": "array",
+            "array": [
+                {"type": "select", "select": {"name": "Result Delivered"}},
+                {"type": "select", "select": {"name": "Manifest Awaiting"}},
+            ],
+        },
+    }
+    assert extract_prop_rollup_status(prop_mixed) == "Result Delivered"
+
+    prop_mixed_reverse = {
+        "type": "rollup",
+        "rollup": {
+            "type": "array",
+            "array": [
+                {"type": "select", "select": {"name": "Manifest Awaiting"}},
+                {"type": "select", "select": {"name": "Result Delivered"}},
+            ],
+        },
+    }
+    assert extract_prop_rollup_status(prop_mixed_reverse) == "Result Delivered"
+
     # Direct select
     prop_direct = {"type": "select", "select": {"name": "Manifest Awaiting"}}
     assert extract_prop_rollup_status(prop_direct) == "Manifest Awaiting"
@@ -365,6 +390,73 @@ def test_notion_token_env_support(monkeypatch):
     monkeypatch.setenv("NOTION_TOKEN", "secret_token_123")
     headers = get_notion_headers()
     assert headers["Authorization"] == "Bearer secret_token_123"
+
+
+def test_fetch_manifest_cases_excludes_non_manifest_awaiting(monkeypatch):
+    from notion_service import fetch_manifest_cases, clear_manifest_cache
+    clear_manifest_cache()
+
+    dummy_pages = [
+        {
+            "id": "page-1",
+            "properties": {
+                "Case Code": {"type": "formula", "formula": {"type": "string", "string": "CD-BDO-201026-01"}},
+                "Manifest Test Type": {"type": "formula", "formula": {"type": "string", "string": "LEGAL PATERNITY"}},
+                "Case Status": {
+                    "type": "rollup",
+                    "rollup": {
+                        "type": "array",
+                        "array": [{"type": "select", "select": {"name": "Manifest Awaiting"}}],
+                    },
+                },
+                "Receiving Lab": {
+                    "type": "rollup",
+                    "rollup": {
+                        "type": "array",
+                        "array": [{"type": "select", "select": {"name": "Eurofins Germany"}}],
+                    },
+                },
+                "P1 Name (Father or Lead)": {"type": "title", "title": [{"plain_text": "John Doe"}]},
+            },
+        },
+        {
+            "id": "page-2",
+            "properties": {
+                "Case Code": {"type": "formula", "formula": {"type": "string", "string": "PP-EBD-011026-02"}},
+                "Manifest Test Type": {"type": "formula", "formula": {"type": "string", "string": "PRIVATE PATERNITY"}},
+                "Case Status": {
+                    "type": "rollup",
+                    "rollup": {
+                        "type": "array",
+                        "array": [
+                            {"type": "select", "select": {"name": "Result Delivered"}},
+                            {"type": "select", "select": {"name": "Manifest Awaiting"}},
+                        ],
+                    },
+                },
+                "Receiving Lab": {
+                    "type": "rollup",
+                    "rollup": {
+                        "type": "array",
+                        "array": [{"type": "select", "select": {"name": "Eurofins Germany"}}],
+                    },
+                },
+                "P1 Name (Father or Lead)": {"type": "title", "title": [{"plain_text": "Simon Oelmann"}]},
+            },
+        },
+    ]
+
+    import notion_service
+    monkeypatch.setattr(notion_service, "query_notion_database", lambda *args, **kwargs: dummy_pages)
+
+    res = fetch_manifest_cases(filter_mode="manifest_batch", force_refresh=True)
+    tags = [c["bdo_tag"] for c in res["cases"]]
+
+    assert "CD-BDO-201026-01" in tags
+    assert "PP-EBD-011026-02" not in tags
+    assert len(res["cases"]) == 1
+    assert res["cases"][0]["case_status"] == "Manifest Awaiting"
+
 
 
 
