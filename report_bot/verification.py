@@ -91,8 +91,12 @@ def _set_contact_footer_style(paragraph: etree._Element) -> None:
             size.set(f"{{{WORD_NS}}}val", CONTACT_FOOTER_FONT_SIZE)
 
 
-def _compact_participant_row(row: etree._Element, participant_count: int) -> None:
-    if participant_count < 5:
+def _compact_participant_row(
+    row: etree._Element,
+    participant_count: int,
+    force_compact: bool = False,
+) -> None:
+    if participant_count < 5 and not force_compact:
         return
     for margin in row.xpath(".//w:tcMar/w:top | .//w:tcMar/w:bottom", namespaces=NS):
         margin.set(f"{{{WORD_NS}}}w", "20")
@@ -153,7 +157,10 @@ def build_verification_docx(
 
     for paragraph in list(body.findall("w:p", NS)):
         paragraph_text = "".join(paragraph.xpath(".//w:t/text()", namespaces=NS)).strip()
+        drawings = paragraph.xpath(".//w:drawing | .//w:pict", namespaces=NS)
         if paragraph_text.startswith("{SO YOU ADD NEW ROWS"):
+            body.remove(paragraph)
+        elif not paragraph_text and not drawings:
             body.remove(paragraph)
 
     case_slots = [
@@ -180,10 +187,11 @@ def build_verification_docx(
     for row in rows[1:]:
         participant_table.remove(row)
 
+    should_compact = len(participants) >= 5 or any(len(p.full_name) > 26 for p in participants)
     formatted_date = collection_date.strftime("%d/%m/%Y")
     for participant in participants:
         row = deepcopy(prototype)
-        _compact_participant_row(row, len(participants))
+        _compact_participant_row(row, len(participants), force_compact=should_compact)
         cells = row.findall("w:tc", NS)
         if len(cells) != 4:
             raise VerificationError("Verification participant row must have four cells")

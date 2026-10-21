@@ -153,3 +153,64 @@ def test_converter_fails_closed_when_libreoffice_is_unavailable(tmp_path: Path) 
     converter.executable = None
     with pytest.raises(VerificationError, match="LibreOffice is required"):
         converter.convert(tmp_path / "input.docx", tmp_path / "output.pdf")
+
+
+def test_long_participant_names_strip_empty_spacers(
+    project_root: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "verification-long-names.docx"
+    case_participants = [
+        Participant(
+            sample_number="VAT261015_019",
+            role="ALLEGED FATHER",
+            full_name="JOSEPH BOAMPONG",
+            date_of_birth="28/08/1981",
+            source_order=0,
+        ),
+        Participant(
+            sample_number="VAT261015_020",
+            role="CHILD",
+            full_name="JOYCE TWENEBOAH KODUAH BOAMPONG",
+            date_of_birth="30/11/2025",
+            source_order=1,
+        ),
+        Participant(
+            sample_number="VAT261015_022",
+            role="CHILD",
+            full_name="JOCELYN TWENEBOAH KODUAH BOAMPONG",
+            date_of_birth="30/11/2025",
+            source_order=2,
+        ),
+    ]
+
+    build_verification_docx(
+        project_root / "verification page template.docx",
+        output,
+        case_code="CD-KBDO-121026-05",
+        collection_date=date(2026, 10, 12),
+        participants=case_participants,
+    )
+
+    with ZipFile(output) as archive:
+        document_xml = archive.read("word/document.xml")
+    document = etree.fromstring(document_xml)
+    body = document.find("w:body", NS)
+
+    # Verify no empty spacer paragraphs remain in the body
+    empty_paragraphs = [
+        p
+        for p in body.findall("w:p", NS)
+        if not "".join(p.xpath(".//w:t/text()", namespaces=NS)).strip()
+        and not p.xpath(".//w:drawing | .//w:pict", namespaces=NS)
+    ]
+    assert len(empty_paragraphs) == 0
+
+    # If LibreOffice converter is available in environment, test actual PDF conversion
+    converter = LibreOfficeConverter()
+    if converter.available:
+        pdf_path = tmp_path / "verification-long-names.pdf"
+        converter.convert(output, pdf_path)
+        doc = fitz.open(pdf_path)
+        assert doc.page_count == 1
+        doc.close()
