@@ -154,11 +154,11 @@ def extract_prop_text(prop):
     if not prop:
         return ""
     ptype = prop.get("type")
-    if ptype == "title":
+    if ptype == "title" or ("title" in prop and ptype is None):
         return "".join([t.get("plain_text", "") for t in prop.get("title", [])]).strip()
-    if ptype == "rich_text":
+    if ptype == "rich_text" or ("rich_text" in prop and ptype is None):
         return "".join([t.get("plain_text", "") for t in prop.get("rich_text", [])]).strip()
-    if ptype == "formula":
+    if ptype == "formula" or ("formula" in prop and ptype is None):
         f = prop.get("formula", {})
         ftype = f.get("type")
         return str(f.get(ftype, "")).strip() if ftype else ""
@@ -409,9 +409,14 @@ def merge_multipart_cases(processed_rows, default_test_type="PRIVATE PATERNITY")
         merged_participants.sort(key=lambda p: get_role_sort_rank(p.get("role")))
             
         # Determine test type
-        test_type = primary["manifest_test_type"]
+        test_type = ""
+        for r in rows_sorted:
+            if r.get("manifest_test_type") and r["manifest_test_type"].strip():
+                test_type = r["manifest_test_type"].strip()
+                break
+
         if not test_type:
-            bdo_tag = primary["case_code"] or primary["entry_id"]
+            bdo_tag = primary.get("case_code") or primary.get("entry_id") or ""
             if "IM" in bdo_tag.upper():
                 test_type = "LEGAL PATERNITY"
             else:

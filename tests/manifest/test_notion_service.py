@@ -458,5 +458,99 @@ def test_fetch_manifest_cases_excludes_non_manifest_awaiting(monkeypatch):
     assert res["cases"][0]["case_status"] == "Manifest Awaiting"
 
 
+def test_process_raw_page_extracts_compound_formula():
+    raw_page = {
+        "id": "notion-p-compound",
+        "properties": {
+            "Entry ID": {"type": "unique_id", "unique_id": {"prefix": "PL", "number": 246}},
+            "Case Code": {"type": "rich_text", "rich_text": [{"plain_text": "IM-EBD-161026-03"}]},
+            "Manifest Test Type": {
+                "type": "formula",
+                "formula": {"type": "string", "string": "LEGAL PATERNITY + MATERNITY"}
+            },
+            "P1 Name (Father or Lead)": {"type": "title", "title": [{"plain_text": "KWAME FATHER"}]},
+            "P1 Role": {"type": "select", "select": {"name": "ALLEGED FATHER"}}
+        }
+    }
+    processed = process_raw_page(raw_page)
+    assert processed["entry_id"] == "PL-246"
+    assert processed["case_code"] == "IM-EBD-161026-03"
+    assert processed["manifest_test_type"] == "LEGAL PATERNITY + MATERNITY"
+
+
+def test_merge_multipart_cases_preserves_compound_test_type():
+    row1 = {
+        "page_id": "p-1",
+        "entry_id": "PL-246",
+        "case_code": "IM-EBD-161026-03",
+        "manifest_test_type": "LEGAL PATERNITY + MATERNITY",
+        "entry_part": "Part 1",
+        "part_num": 1,
+        "special_requests": "",
+        "receiving_lab": "EUROFINS",
+        "case_status": "Manifest Awaiting",
+        "ready_for_manifest": True,
+        "case_page_ids": [],
+        "participants": [{"name": "FATHER", "dob": "01011985", "role": "ALLEGED FATHER", "ethnicity": "AFRICAN"}]
+    }
+    row2 = {
+        "page_id": "p-2",
+        "entry_id": "PL-247",
+        "case_code": "IM-EBD-161026-03",
+        "manifest_test_type": "LEGAL PATERNITY + MATERNITY",
+        "entry_part": "Part 2",
+        "part_num": 2,
+        "special_requests": "",
+        "receiving_lab": "EUROFINS",
+        "case_status": "Manifest Awaiting",
+        "ready_for_manifest": True,
+        "case_page_ids": [],
+        "participants": [
+            {"name": "MOTHER", "dob": "02021988", "role": "MOTHER", "ethnicity": "AFRICAN"},
+            {"name": "CHILD", "dob": "03032015", "role": "CHILD", "ethnicity": "AFRICAN"}
+        ]
+    }
+    cases = merge_multipart_cases([row1, row2])
+    assert len(cases) == 1
+    assert cases[0]["bdo_tag"] == "IM-EBD-161026-03"
+    assert cases[0]["test_type"] == "LEGAL PATERNITY + MATERNITY"
+    assert len(cases[0]["participants"]) == 3
+
+
+def test_merge_multipart_cases_falls_back_to_part2_test_type():
+    row1 = {
+        "page_id": "p-1",
+        "entry_id": "PL-246",
+        "case_code": "IM-EBD-161026-03",
+        "manifest_test_type": "",  # Blank in row 1
+        "entry_part": "Part 1",
+        "part_num": 1,
+        "special_requests": "",
+        "receiving_lab": "EUROFINS",
+        "case_status": "Manifest Awaiting",
+        "ready_for_manifest": True,
+        "case_page_ids": [],
+        "participants": [{"name": "FATHER", "dob": "01011985", "role": "ALLEGED FATHER", "ethnicity": "AFRICAN"}]
+    }
+    row2 = {
+        "page_id": "p-2",
+        "entry_id": "PL-247",
+        "case_code": "IM-EBD-161026-03",
+        "manifest_test_type": "LEGAL PATERNITY + MATERNITY",  # Present in row 2
+        "entry_part": "Part 2",
+        "part_num": 2,
+        "special_requests": "",
+        "receiving_lab": "EUROFINS",
+        "case_status": "Manifest Awaiting",
+        "ready_for_manifest": True,
+        "case_page_ids": [],
+        "participants": [{"name": "CHILD", "dob": "03032015", "role": "CHILD", "ethnicity": "AFRICAN"}]
+    }
+    cases = merge_multipart_cases([row1, row2])
+    assert len(cases) == 1
+    assert cases[0]["test_type"] == "LEGAL PATERNITY + MATERNITY"
+
+
+
 
 

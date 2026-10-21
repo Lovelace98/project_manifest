@@ -186,3 +186,70 @@ def test_create_excel_manifest_preserves_sorted_sheets():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+def test_create_excel_manifest_writes_compound_test_type_to_b3():
+    cases = [
+        {
+            "bdo_tag": "IM-EBD-161026-03",
+            "test_type": "LEGAL PATERNITY + MATERNITY",
+            "special_requests": "None",
+            "participants": [
+                {"name": "KWAME FATHER", "dob": "01011985", "role": "ALLEGED FATHER", "ethnicity": "AFRICAN"},
+                {"name": "AMA MOTHER", "dob": "02021988", "role": "MOTHER", "ethnicity": "AFRICAN"},
+                {"name": "KOFI CHILD", "dob": "03032015", "role": "CHILD", "ethnicity": "AFRICAN"},
+            ],
+        }
+    ]
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        create_excel_manifest(cases, tmp_path)
+        wb = openpyxl.load_workbook(tmp_path)
+        ws = wb["IM-EBD-161026-03"]
+        assert ws.cell(row=3, column=1).value == "Test type:"
+        assert ws.cell(row=3, column=2).value == "LEGAL PATERNITY + MATERNITY"
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def test_parse_docx_joint_paternity_maternity():
+    import docx
+    from parser import parse_docx
+
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=4)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = "NAME OF PARTICIPANTS"
+    hdr_cells[1].text = "BDO TAG"
+    hdr_cells[2].text = "TEST TYPE"
+    hdr_cells[3].text = "STATUS"
+
+    row_cells = table.rows[1].cells
+    row_cells[0].text = "KWAME FATHER 01/01/1980 & AMA MOTHER 02/02/1985 & KOFI CHILD 03/03/2015"
+    row_cells[1].text = "IM-EBD-161026-03"
+    row_cells[2].text = "PATERNITY + MATERNITY"
+    row_cells[3].text = "IN"
+
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        doc.save(tmp_path)
+        result = parse_docx(tmp_path)
+        assert len(result["cases"]) == 1
+        c = result["cases"][0]
+        assert c["bdo_tag"] == "IM-EBD-161026-03"
+        assert c["test_type"] == "LEGAL PATERNITY + MATERNITY"
+        roles = [p["role"] for p in c["participants"]]
+        assert "ALLEGED FATHER" in roles
+        assert "MOTHER" in roles
+        assert "CHILD" in roles
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+

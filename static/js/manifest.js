@@ -517,6 +517,44 @@ function renderWorkspace() {
     updateStatus('Ready', 'fa-check');
 }
 
+function renderTestTypeOptions(currentTestType) {
+    const standardOptions = [
+        "PRIVATE PATERNITY",
+        "LEGAL PATERNITY",
+        "PRIVATE PATERNITY + MATERNITY",
+        "LEGAL PATERNITY + MATERNITY",
+        "PRIVATE MATERNITY",
+        "LEGAL MATERNITY",
+        "PRIVATE PRENATAL PATERNITY",
+        "LEGAL PRENATAL PATERNITY",
+        "PRIVATE PRENATAL PATERNITY + GENDER TEST",
+        "PRENATAL GENDER TEST",
+        "Y CHROMOSOME TEST",
+        "LEGAL Y CHROMOSOME TEST",
+        "GRANDPARENTAGE TEST",
+        "LEGAL GRANDPARENTAGE TEST",
+        "SIBLINGSHIP",
+        "LEGAL SIBLINGSHIP",
+        "AVUNCULAR",
+        "LEGAL AVUNCULAR",
+        "SINGLE PROFILE",
+        "LEGAL SINGLE PROFILE",
+        "ANCESTRY",
+        "LEGAL ANCESTRY"
+    ];
+
+    const current = (currentTestType || "").trim().toUpperCase();
+    const options = [...standardOptions];
+    if (current && !options.includes(current)) {
+        options.push(current);
+    }
+
+    return options.map(opt => {
+        const isSelected = opt === current;
+        return `<option value="${escapeHtml(opt)}"${isSelected ? ' selected' : ''}>${escapeHtml(opt)}</option>`;
+    }).join('\n');
+}
+
 function renderCards() {
     const grid = document.getElementById('cases-grid') || casesGrid;
     const badge = document.getElementById('cases-count-badge') || casesCountBadge;
@@ -628,14 +666,7 @@ function renderCards() {
                 <div class="form-group">
                     <label>Test Type</label>
                     <select class="form-control" onchange="updateCaseField(${caseIdx}, 'test_type', this.value)">
-                        <option value="PRIVATE PATERNITY" ${caseItem.test_type === 'PRIVATE PATERNITY' ? 'selected' : ''}>PRIVATE PATERNITY</option>
-                        <option value="LEGAL PATERNITY" ${caseItem.test_type === 'LEGAL PATERNITY' ? 'selected' : ''}>LEGAL PATERNITY</option>
-                        <option value="PRIVATE MATERNITY" ${caseItem.test_type === 'PRIVATE MATERNITY' ? 'selected' : ''}>PRIVATE MATERNITY</option>
-                        <option value="LEGAL MATERNITY" ${caseItem.test_type === 'LEGAL MATERNITY' ? 'selected' : ''}>LEGAL MATERNITY</option>
-                        <option value="Y CHROMOSOME TEST" ${caseItem.test_type === 'Y CHROMOSOME TEST' ? 'selected' : ''}>Y CHROMOSOME TEST</option>
-                        <option value="LEGAL Y CHROMOSOME TEST" ${caseItem.test_type === 'LEGAL Y CHROMOSOME TEST' ? 'selected' : ''}>LEGAL Y CHROMOSOME TEST</option>
-                        <option value="GRANDPARENTAGE TEST" ${caseItem.test_type === 'GRANDPARENTAGE TEST' ? 'selected' : ''}>GRANDPARENTAGE TEST</option>
-                        <option value="LEGAL GRANDPARENTAGE TEST" ${caseItem.test_type === 'LEGAL GRANDPARENTAGE TEST' ? 'selected' : ''}>LEGAL GRANDPARENTAGE TEST</option>
+                        ${renderTestTypeOptions(caseItem.test_type)}
                     </select>
                 </div>
             </div>
@@ -702,12 +733,14 @@ function addParticipant(caseIdx) {
         const numParts = cases[caseIdx].participants.length;
         let defaultRole = "CHILD";
         
-        if (testTypeUpper.includes("Y CHROM")) {
+        if (testTypeUpper.includes("Y CHROM") || testTypeUpper.includes("Y-CHROM")) {
             defaultRole = `MALE ${numParts + 1}`;
         } else if (testTypeUpper.includes("GRAND")) {
             defaultRole = numParts === 0 ? "ALLEGED GRANDPARENT" : "GRANDCHILD";
         } else if (numParts === 0) {
-            defaultRole = testTypeUpper.includes("MATERNITY") ? "ALLEGED MOTHER" : "ALLEGED FATHER";
+            defaultRole = (testTypeUpper.includes("MATERNITY") && !testTypeUpper.includes("PATERNITY")) ? "ALLEGED MOTHER" : "ALLEGED FATHER";
+        } else if (numParts === 1 && testTypeUpper.includes("MATERNITY") && testTypeUpper.includes("PATERNITY")) {
+            defaultRole = "MOTHER";
         }
             
         cases[caseIdx].participants.push({

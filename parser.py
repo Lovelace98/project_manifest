@@ -173,6 +173,7 @@ def parse_docx(file_path):
                 is_y_chrom = any(x in raw_test_type_upper for x in ["Y CHROM", "Y-CHROM", "Y STR", "Y-STR", "YSTR"])
                 is_grandparent = any(x in raw_test_type_upper for x in ["GRANDPARENT", "GRAND PARENT"])
                 is_maternity = "MATERNITY" in raw_test_type_upper
+                is_paternity = "PATERNITY" in raw_test_type_upper or (not is_y_chrom and not is_grandparent and not is_maternity)
                 
                 num_parts = len(part_strings)
                 
@@ -192,7 +193,9 @@ def parse_docx(file_path):
                         else:
                             role = "GRANDCHILD"
                     elif idx == 0:
-                        role = "ALLEGED MOTHER" if is_maternity else "ALLEGED FATHER"
+                        role = "ALLEGED MOTHER" if (is_maternity and not is_paternity) else "ALLEGED FATHER"
+                    elif idx == 1 and (is_paternity and is_maternity):
+                        role = "MOTHER"
                     else:
                         role = "CHILD"
                         
@@ -204,24 +207,20 @@ def parse_docx(file_path):
                     })
                 
                 # Determine default Excel test type mapping
-                # Default: PRIVATE PATERNITY or PRIVATE MATERNITY
-                # But if BDO Tag contains "IM": LEGAL PATERNITY / LEGAL MATERNITY
-                # Let's preserve other specific test types if they don't match standard paternity/maternity.
-                excel_test_type = "PRIVATE MATERNITY" if is_maternity else "PRIVATE PATERNITY"
-                if is_y_chrom:
-                    excel_test_type = "Y CHROMOSOME TEST"
+                bdo_upper = raw_bdo.upper()
+                is_legal = any(k in bdo_upper for k in ["IM", "OVCD", "WWCD", "OVIM", "WWIM"]) or "LEGAL" in raw_test_type_upper
+                prefix = "LEGAL" if is_legal else "PRIVATE"
+
+                if is_paternity and is_maternity:
+                    excel_test_type = f"{prefix} PATERNITY + MATERNITY"
+                elif is_y_chrom:
+                    excel_test_type = f"{prefix} Y CHROMOSOME TEST"
                 elif is_grandparent:
-                    excel_test_type = "GRANDPARENTAGE TEST"
-                    
-                if "IM" in raw_bdo.upper():
-                    if is_maternity:
-                        excel_test_type = "LEGAL MATERNITY"
-                    elif is_y_chrom:
-                        excel_test_type = "LEGAL Y CHROMOSOME TEST"
-                    elif is_grandparent:
-                        excel_test_type = "LEGAL GRANDPARENTAGE TEST"
-                    else:
-                        excel_test_type = "LEGAL PATERNITY"
+                    excel_test_type = f"{prefix} GRANDPARENTAGE TEST"
+                elif is_maternity:
+                    excel_test_type = f"{prefix} MATERNITY"
+                else:
+                    excel_test_type = f"{prefix} PATERNITY"
                 
                 # Map special requests: if status contains anything else besides just "IN"
                 status_clean = raw_status.upper().strip()
