@@ -199,6 +199,16 @@ def build_verification_docx(
     for participant in participants:
         row = deepcopy(prototype)
         _compact_participant_row(row, len(participants), force_compact=should_compact)
+        tr_properties = row.find("w:trPr", NS)
+        if tr_properties is None:
+            tr_properties = etree.Element(f"{{{WORD_NS}}}trPr")
+            row.insert(0, tr_properties)
+        tr_height = tr_properties.find("w:trHeight", NS)
+        if tr_height is None:
+            tr_height = etree.SubElement(tr_properties, f"{{{WORD_NS}}}trHeight")
+        tr_height.set(f"{{{WORD_NS}}}val", "288")
+        tr_height.set(f"{{{WORD_NS}}}hRule", "atLeast")
+
         cells = row.findall("w:tc", NS)
         if len(cells) != 3:
             raise VerificationError("Verification participant row must have three cells")
@@ -214,6 +224,26 @@ def build_verification_docx(
 
     if participant_table.findall("w:tr", NS)[0] is not header:
         raise VerificationError("Verification table header changed unexpectedly")
+
+    part_count = len(participants)
+    if part_count <= 3:
+        after_twips = "450"
+    elif part_count == 4:
+        after_twips = "250"
+    else:
+        after_twips = "120"
+
+    for p in body.findall("w:p", NS):
+        if "Medical Director" in "".join(p.xpath(".//w:t/text()", namespaces=NS)):
+            p_pr = p.find("w:pPr", NS)
+            if p_pr is None:
+                p_pr = etree.Element(f"{{{WORD_NS}}}pPr")
+                p.insert(0, p_pr)
+            spacing = p_pr.find("w:spacing", NS)
+            if spacing is None:
+                spacing = etree.SubElement(p_pr, f"{{{WORD_NS}}}spacing")
+            spacing.set(f"{{{WORD_NS}}}after", after_twips)
+            break
 
     footer = etree.fromstring(parts["word/footer1.xml"])
     footer_paragraphs = footer.xpath("//w:p", namespaces=NS)
