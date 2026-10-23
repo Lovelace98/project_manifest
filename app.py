@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import io
+import re
 import time
 import secrets
 import asyncio
@@ -504,7 +505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "user": request.session.get("user", "Admin"),
                 "csrf_token": csrf_token,
                 "default_review_mode": preferences.default_review_mode.value,
-                "default_case_type": getattr(preferences, "default_case_type", CaseType.PERSONAL).value,
+                "default_case_type": getattr(preferences, "default_case_type", CaseType.ISSUE).value,
                 "max_batch_files": application_settings.max_batch_files,
                 "notion_ready": notion_ready,
                 "libreoffice_ready": lo_available,
@@ -638,6 +639,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": "Missing cases data"}, status_code=400)
 
         cases = data["cases"]
+        allow_unverified = data.get("allow_unverified", False)
+        if not allow_unverified:
+            unverified_tags = [
+                c.get("bdo_tag") or "Unnamed Case"
+                for c in cases
+                if c.get("ready_for_manifest") is False
+                or "⚠️" in str(c.get("test_type", ""))
+                or "CHECK:" in str(c.get("test_type", ""))
+            ]
+            if unverified_tags:
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"Export blocked: {len(unverified_tags)} unverified case(s) detected "
+                            f"({', '.join(unverified_tags[:3])}{'...' if len(unverified_tags) > 3 else ''}). "
+                            f"Please verify in Notion before exporting."
+                        ),
+                        "unverified_tags": unverified_tags,
+                    },
+                    status_code=422,
+                )
+
         try:
             with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
                 tmp_path = tmp.name
@@ -695,7 +718,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         files: Annotated[list[UploadFile], File()],
         review_mode: Annotated[ReviewMode, Form()],
-        default_case_type: Annotated[CaseType, Form()] = CaseType.PERSONAL,
+        default_case_type: Annotated[CaseType, Form()] = CaseType.ISSUE,
         lab_source: Annotated[LabSource, Form()] = LabSource.EUROFINS,
         case_types: Annotated[list[CaseType] | None, Form()] = None,
         auto_upload_notion: Annotated[bool, Form()] = False,
@@ -825,6 +848,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
                     # 3. Participant cross-verification against Notion Participant DB
                     n_parts = n_data.get("participants", []) if n_data else []
+
+                    # Auto-enrich missing participant DOBs (e.g. UFC reports) from Notion records
+                    if n_parts and item.report:
+                        for ext in item.report.participants:
+                            if not ext.date_of_birth or ext.date_of_birth == "-":
+                                norm_ext_name = re.sub(r"[^A-Z]", "", ext.full_name.upper())
+                                ext_role_clean = ext.role.upper().replace("ALLEGED ", "").strip()
+                                for n_part in n_parts:
+                                    norm_notion_name = re.sub(r"[^A-Z]", "", str(n_part.get("name", "")).upper())
+                                    notion_role_clean = str(n_part.get("role", "")).upper().replace("ALLEGED ", "").strip()
+                                    name_matched = (
+                                        bool(norm_ext_name and norm_notion_name)
+                                        and (norm_ext_name == norm_notion_name or norm_ext_name in norm_notion_name or norm_notion_name in norm_ext_name)
+                                    )
+                                    role_matched = bool(ext_role_clean and notion_role_clean and ext_role_clean == notion_role_clean)
+                                    if name_matched or role_matched:
+                                        n_dob = n_part.get("dob")
+                                        if n_dob and n_dob != "-":
+                                            ext.date_of_birth = n_dob
+                                            break
+
                     part_check = cross_verify_participants(item.report.participants, n_parts)
                     item.notion_verification = part_check
                     if not part_check.get("verified"):
@@ -937,6 +981,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="This report could not be parsed")
         item.report.blocking_errors = _validation_errors(item.report)
         _duplicate_case_warnings(job)
+        if item.case_type == CaseType.ISSUE:
+            item.approved = False
+            item.state = ItemState.NEEDS_REVIEW
+            app.state.job_store.save(job)
+            raise HTTPException(
+                status_code=422,
+                detail="Report type must be set to either Personal or Certified / Legal before approval.",
+            )
         if item.report.blocking_errors:
             item.approved = False
             item.state = ItemState.NEEDS_REVIEW

@@ -589,6 +589,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="This report could not be parsed")
         item.report.blocking_errors = _validation_errors(item.report)
         _duplicate_case_warnings(job)
+        if item.case_type == CaseType.ISSUE:
+            item.approved = False
+            item.state = ItemState.NEEDS_REVIEW
+            app.state.job_store.save(job)
+            raise HTTPException(
+                status_code=422,
+                detail="Report type must be set to either Personal or Certified / Legal before approval.",
+            )
         if item.report.blocking_errors:
             item.approved = False
             item.state = ItemState.NEEDS_REVIEW

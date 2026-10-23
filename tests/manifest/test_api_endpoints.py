@@ -102,3 +102,32 @@ def test_favicon_route(client):
     assert rv.status_code == 200
     assert "image" in rv.headers.get("content-type", "")
     assert len(rv.content) > 0
+
+
+def test_export_route_blocks_unverified_cases(client):
+    cases = [{
+        "bdo_tag": "BDO-UNVERIFIED-01",
+        "test_type": "PRIVATE PATERNITY",
+        "ready_for_manifest": False,
+        "participants": [{"name": "FATHER", "dob": "01011985", "role": "ALLEGED FATHER", "ethnicity": "AFRICAN"}]
+    }]
+    rv = client.post('/api/export', json={"cases": cases})
+    assert rv.status_code == 422
+    data = rv.json()
+    assert "Export blocked" in data["error"]
+    assert "BDO-UNVERIFIED-01" in data["unverified_tags"]
+
+
+def test_export_route_blocks_test_type_mismatch(client):
+    cases = [{
+        "bdo_tag": "CD-MISMATCH-01",
+        "test_type": "⚠️ CHECK: service says PRIVATE, code says LEGAL",
+        "ready_for_manifest": True,
+        "participants": [{"name": "FATHER", "dob": "01011985", "role": "ALLEGED FATHER", "ethnicity": "AFRICAN"}]
+    }]
+    rv = client.post('/api/export', json={"cases": cases})
+    assert rv.status_code == 422
+    data = rv.json()
+    assert "Export blocked" in data["error"]
+    assert "CD-MISMATCH-01" in data["unverified_tags"]
+

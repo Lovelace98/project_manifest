@@ -58,6 +58,13 @@ def normalize_dob_value(value: object) -> str:
     elif re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", standardized):
         standardized = standardized.replace("-", "/")
 
+    if re.fullmatch(r"\d{8}", standardized):
+        d = standardized[:2]
+        m = standardized[2:4]
+        y = standardized[4:]
+        if 1 <= int(d) <= 31 and 1 <= int(m) <= 12 and 1900 <= int(y) <= 2100:
+            return f"{d}/{m}/{y}"
+
     if re.fullmatch(r"\d{4}", standardized):
         year = int(standardized)
         if 1900 <= year <= 2100:
@@ -115,6 +122,7 @@ def valid_date_of_birth(value: str) -> bool:
 class CaseType(StrEnum):
     PERSONAL = "PERSONAL"
     CERTIFIED_LEGAL = "CERTIFIED_LEGAL"
+    ISSUE = "ISSUE"
 
 
 class LabSource(StrEnum):
@@ -225,7 +233,7 @@ class JobRecord(BaseModel):
 
 class AppPreferences(BaseModel):
     default_review_mode: ReviewMode = ReviewMode.REVIEW
-    default_case_type: CaseType = CaseType.PERSONAL
+    default_case_type: CaseType = CaseType.ISSUE
 
 
 class ParticipantUpdate(BaseModel):

@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 import pymupdf as fitz
 
-from report_bot.domain import CaseType, LabSource, Participant, ReportData
+from report_bot.domain import CaseType, LabSource, Participant, ReportData, normalize_dob_value
 from notion_service import (
     get_notion_headers,
     execute_notion_request,
@@ -286,7 +286,7 @@ def fetch_notion_verification_data(
                             p1_role = extract_prop_select(props.get("P1 Role")).upper() or "ALLEGED FATHER"
                             notion_parts.append({
                                 "name": p1_name,
-                                "dob": format_notion_dob(p1_dob_raw),
+                                "dob": normalize_dob_value(p1_dob_raw),
                                 "role": p1_role,
                             })
                         # P2, P3, P4
@@ -297,7 +297,7 @@ def fetch_notion_verification_data(
                                 p_role = extract_prop_select(props.get(f"P{idx} Role")).upper() or "CHILD"
                                 notion_parts.append({
                                     "name": p_name,
-                                    "dob": format_notion_dob(p_dob_raw),
+                                    "dob": normalize_dob_value(p_dob_raw),
                                     "role": p_role,
                                 })
                     result["participants"] = notion_parts
@@ -312,7 +312,7 @@ def fetch_notion_verification_data(
 def determine_report_classification(
     case_code: str,
     notion_data: dict[str, Any] | None,
-    default_case_type: CaseType = CaseType.PERSONAL,
+    default_case_type: CaseType = CaseType.ISSUE,
 ) -> dict[str, Any]:
     """
     Applies the dual 'AND' operator check between Case Code prefix and Notion 'Test or Service'.
@@ -349,14 +349,20 @@ def determine_report_classification(
                 "badge_status": "neutral",
             }
         else:
+            is_issue = default_case_type == CaseType.ISSUE
             return {
                 "case_type": default_case_type,
                 "verified": False,
                 "mismatch": True,
                 "needs_manual_review": True,
-                "reason": f"Unrecognized case code prefix '{prefix}' and case not found in Notion.",
-                "badge_label": "Review Required",
-                "badge_status": "warning",
+                "reason": (
+                    f"Unrecognized case code prefix '{prefix}' and case not found in Notion. "
+                    f"Report type set to Issue: select Personal or Certified / Legal before approval."
+                    if is_issue
+                    else f"Unrecognized case code prefix '{prefix}' and case not found in Notion."
+                ),
+                "badge_label": "Issue (Unclassified)" if is_issue else "Review Required",
+                "badge_status": "danger" if is_issue else "warning",
             }
 
     notion_services = [str(s).upper() for s in notion_data.get("test_or_service", [])]

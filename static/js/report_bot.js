@@ -249,8 +249,16 @@ function typeOptions(current) {
 
 function railTagsHtml(item) {
   const tags = [];
-  const isPersonal = item.case_type === "PERSONAL";
-  tags.push(`<span class="rail-mini-badge ${isPersonal ? "badge-pill-neutral" : "badge-pill-info"}">${isPersonal ? "Personal" : "Certified"}</span>`);
+  let typeBadgeClass = "badge-pill-neutral";
+  let typeBadgeText = "Personal";
+  if (item.case_type === "ISSUE") {
+    typeBadgeClass = "badge-pill-danger";
+    typeBadgeText = "⚠️ Issue";
+  } else if (item.case_type === "CERTIFIED_LEGAL") {
+    typeBadgeClass = "badge-pill-info";
+    typeBadgeText = "Certified";
+  }
+  tags.push(`<span class="rail-mini-badge ${typeBadgeClass}">${typeBadgeText}</span>`);
 
   if (item.layout_warnings && item.layout_warnings.length > 0) {
     tags.push(`<span class="rail-mini-badge badge-pill-warning" title="${escapeHtml(item.layout_warnings.join('; '))}"><i class="fa-solid fa-triangle-exclamation"></i> Layout Alert</span>`);
@@ -401,12 +409,14 @@ function renderDetail(item) {
       </div>
       ${reportWarnings(item)}
       ${item.processing_error ? `<div class="alert alert-danger" role="alert">${escapeHtml(item.processing_error)}</div>` : ""}
-      ${item.needs_manual_review ? `<div class="alert alert-warning" role="alert"><i class="fa-solid fa-circle-exclamation"></i> <strong>Manual Review Required:</strong> Automated integrity checks flagged this report. Verify the details below and save to confirm.</div>` : ""}
+      ${item.case_type === "ISSUE" ? `<div id="issue-case-type-banner" class="alert alert-danger" role="alert" style="display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-triangle-exclamation"></i> <span><strong>Action Required:</strong> Report type is set to <strong>Issue</strong> (unrecognized case code prefix and not found in Notion). Please change the Report Type below to <strong>Personal</strong> or <strong>Certified / Legal</strong> before approving.</span></div>` : ""}
+      ${item.needs_manual_review && item.case_type !== "ISSUE" ? `<div class="alert alert-warning" role="alert"><i class="fa-solid fa-circle-exclamation"></i> <strong>Manual Review Required:</strong> Automated integrity checks flagged this report. Verify the details below and save to confirm.</div>` : ""}
       ${integrityCardHtml(item)}
       <div class="detail-grid">
         <label class="field">Case reference<input name="case_code" value="${escapeHtml(report.case_code)}" required ${locked ? "disabled" : ""}></label>
         <label class="field">Report type
-          <select name="case_type" ${locked ? "disabled" : ""}>
+          <select name="case_type" id="item-case-type-select" ${locked ? "disabled" : ""}>
+            ${item.case_type === "ISSUE" ? '<option value="ISSUE" selected>⚠️ ISSUE (Select Report Type)</option>' : ''}
             <option value="PERSONAL"${item.case_type === "PERSONAL" ? " selected" : ""}>PERSONAL</option>
             <option value="CERTIFIED_LEGAL"${item.case_type === "CERTIFIED_LEGAL" ? " selected" : ""}>CERTIFIED / LEGAL</option>
           </select>
@@ -422,7 +432,7 @@ function renderDetail(item) {
           <tbody>${participantRows}</tbody>
         </table>
       </div>
-      ${locked ? "" : `<div class="detail-actions"><button class="button button-secondary" type="submit">Save changes</button><button id="approve-button" class="button button-primary" type="button">Save &amp; approve</button></div>`}
+      ${locked ? "" : `<div class="detail-actions"><button class="button button-secondary" type="submit">Save changes</button><button id="approve-button" class="button button-primary ${item.case_type === 'ISSUE' ? 'btn-locked-issue' : ''}" type="button" ${item.case_type === 'ISSUE' ? 'style="opacity: 0.65; cursor: not-allowed;" title="Cannot approve: Report type is set to Issue"' : ''}>Save &amp; approve</button></div>`}
     </form>`;
 
   if (!locked) {
@@ -431,8 +441,44 @@ function renderDetail(item) {
       await saveItem(item.id, false);
     });
     document.getElementById("approve-button").addEventListener("click", async () => {
+      const caseTypeSelect = document.getElementById("item-case-type-select");
+      if (caseTypeSelect && caseTypeSelect.value === "ISSUE") {
+        showAlert("Cannot approve: Report type is set to Issue. Please select Personal or Certified / Legal first.", "error");
+        caseTypeSelect.focus();
+        caseTypeSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
       await saveItem(item.id, true);
     });
+
+    const caseTypeSelect = document.getElementById("item-case-type-select");
+    if (caseTypeSelect) {
+      caseTypeSelect.addEventListener("change", () => {
+        const approveBtn = document.getElementById("approve-button");
+        const banner = document.getElementById("issue-case-type-banner");
+        if (caseTypeSelect.value !== "ISSUE") {
+          if (approveBtn) {
+            approveBtn.classList.remove("btn-locked-issue");
+            approveBtn.style.opacity = "1";
+            approveBtn.style.cursor = "pointer";
+            approveBtn.removeAttribute("title");
+          }
+          if (banner) {
+            banner.style.display = "none";
+          }
+        } else {
+          if (approveBtn) {
+            approveBtn.classList.add("btn-locked-issue");
+            approveBtn.style.opacity = "0.65";
+            approveBtn.style.cursor = "not-allowed";
+            approveBtn.title = "Cannot approve: Report type is set to Issue";
+          }
+          if (banner) {
+            banner.style.display = "flex";
+          }
+        }
+      });
+    }
   }
 }
 
@@ -532,8 +578,12 @@ function renderBatchSummary(job) {
     summaryTableBody.innerHTML = job.items.map((item) => {
       const caseCode = item.report?.case_code || item.original_filename;
       const outputFilename = item.output_filename || (item.state === "COMPLETE" ? `${caseCode}.pdf` : "Pending");
-      const isPersonal = item.case_type === "PERSONAL";
-      const classificationHtml = `<span class="badge-pill ${isPersonal ? "badge-pill-neutral" : "badge-pill-info"}">${isPersonal ? "Personal" : "Certified / Legal"}</span>`;
+      let classificationHtml = `<span class="badge-pill badge-pill-neutral">Personal</span>`;
+      if (item.case_type === "ISSUE") {
+        classificationHtml = `<span class="badge-pill badge-pill-danger"><i class="fa-solid fa-triangle-exclamation"></i> Issue (Unclassified)</span>`;
+      } else if (item.case_type === "CERTIFIED_LEGAL") {
+        classificationHtml = `<span class="badge-pill badge-pill-info">Certified / Legal</span>`;
+      }
 
       let layoutHtml = '<span class="badge-pill badge-pill-success"><i class="fa-solid fa-check"></i> Clean</span>';
       if (item.layout_warnings && item.layout_warnings.length > 0) {
@@ -923,7 +973,7 @@ if (uploadForm) {
     const formData = new FormData();
     formData.append("lab_source", labSourceRadio ? labSourceRadio.value : "EUROFINS");
     formData.append("review_mode", reviewModeRadio ? reviewModeRadio.value : "REVIEW");
-    formData.append("default_case_type", defaultCaseTypeInput ? defaultCaseTypeInput.value : "PERSONAL");
+    formData.append("default_case_type", defaultCaseTypeInput ? defaultCaseTypeInput.value : "ISSUE");
     formData.append("auto_upload_notion", autoUploadNotionCheckbox?.checked ? "true" : "false");
 
     for (const file of selectedFilesList) {
@@ -1081,7 +1131,7 @@ if (savePageSettingsBtn) {
     try {
       const payload = {
         default_review_mode: selectedReview.value,
-        default_case_type: selectedCase ? selectedCase.value : "PERSONAL",
+        default_case_type: selectedCase ? selectedCase.value : "ISSUE",
       };
       await api("/api/settings", {
         method: "PUT",

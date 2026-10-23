@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import pymupdf as fitz
 import pytest
 
@@ -230,4 +231,70 @@ def test_detect_layout_anomalies_eurofins_multipage_truly_missing_disclaimer():
         case_type=CaseType.PERSONAL,
     )
     assert any("Eurofins footer disclaimer anchor missing" in w for w in warnings)
+
+
+def test_determine_report_classification_defaults_to_issue():
+    res = determine_report_classification(
+        case_code="XYZ-ACC-101026-01",
+        notion_data={"found": False},
+        default_case_type=CaseType.ISSUE,
+    )
+    assert res["case_type"] == CaseType.ISSUE
+    assert res["badge_label"] == "Issue (Unclassified)"
+    assert res["badge_status"] == "danger"
+    assert res["needs_manual_review"] is True
+    assert "select Personal or Certified / Legal before approval" in res["reason"]
+
+
+def test_determine_report_classification_fallback_personal():
+    res = determine_report_classification(
+        case_code="XYZ-ACC-101026-01",
+        notion_data={"found": False},
+        default_case_type=CaseType.PERSONAL,
+    )
+    assert res["case_type"] == CaseType.PERSONAL
+    assert res["badge_status"] == "warning"
+
+
+def test_ufc_dob_auto_enrichment():
+    extracted = [
+        Participant(
+            id="1",
+            sample_number="S1",
+            role="ALLEGED FATHER",
+            full_name="KWAME MENSAH",
+            date_of_birth="-",
+            source_order=1,
+        ),
+        Participant(
+            id="2",
+            sample_number="S2",
+            role="CHILD",
+            full_name="KOFI MENSAH",
+            date_of_birth="-",
+            source_order=2,
+        ),
+    ]
+    notion_parts = [
+        {"name": "KWAME MENSAH", "role": "ALLEGED FATHER", "dob": "12/05/1980"},
+        {"name": "KOFI MENSAH", "role": "CHILD", "dob": "25/11/2018"},
+    ]
+
+    for ext in extracted:
+        if not ext.date_of_birth or ext.date_of_birth == "-":
+            norm_ext = re.sub(r"[^A-Z]", "", ext.full_name.upper())
+            for n_p in notion_parts:
+                norm_notion = re.sub(r"[^A-Z]", "", str(n_p.get("name", "")).upper())
+                if norm_ext and norm_ext == norm_notion:
+                    ext.date_of_birth = n_p.get("dob")
+                    break
+
+    assert extracted[0].date_of_birth == "12/05/1980"
+    assert extracted[1].date_of_birth == "25/11/2018"
+
+    res = cross_verify_participants(extracted, notion_parts)
+    assert res["verified"] is True
+    assert len(res["discrepancies"]) == 0
+
+
 

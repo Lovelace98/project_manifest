@@ -169,10 +169,12 @@ function renderDetail(item) {
       </div>
       ${reportWarnings(item)}
       ${item.processing_error ? `<div class="alert alert-danger" role="alert">${escapeHtml(item.processing_error)}</div>` : ""}
+      ${item.case_type === "ISSUE" ? `<div id="issue-case-type-banner" class="alert alert-danger" role="alert" style="display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-triangle-exclamation"></i> <span><strong>Action Required:</strong> Report type is set to <strong>Issue</strong> (unrecognized case code prefix and not found in Notion). Please change the Report Type below to <strong>Personal</strong> or <strong>Certified / Legal</strong> before approving.</span></div>` : ""}
       <div class="detail-grid">
         <label class="field">Case reference<input name="case_code" value="${escapeHtml(report.case_code)}" required ${locked ? "disabled" : ""}></label>
         <label class="field">Report type
-          <select name="case_type" ${locked ? "disabled" : ""}>
+          <select name="case_type" id="item-case-type-select" ${locked ? "disabled" : ""}>
+            ${item.case_type === "ISSUE" ? '<option value="ISSUE" selected>⚠️ ISSUE (Select Report Type)</option>' : ''}
             <option value="PERSONAL"${item.case_type === "PERSONAL" ? " selected" : ""}>PERSONAL</option>
             <option value="CERTIFIED_LEGAL"${item.case_type === "CERTIFIED_LEGAL" ? " selected" : ""}>CERTIFIED / LEGAL</option>
           </select>
@@ -188,7 +190,7 @@ function renderDetail(item) {
           <tbody>${participantRows}</tbody>
         </table>
       </div>
-      ${locked ? "" : `<div class="detail-actions"><button class="button button-secondary" type="submit">Save changes</button><button id="approve-button" class="button button-primary" type="button">Save &amp; approve</button></div>`}
+      ${locked ? "" : `<div class="detail-actions"><button class="button button-secondary" type="submit">Save changes</button><button id="approve-button" class="button button-primary ${item.case_type === 'ISSUE' ? 'btn-locked-issue' : ''}" type="button" ${item.case_type === 'ISSUE' ? 'style="opacity: 0.65; cursor: not-allowed;" title="Cannot approve: Report type is set to Issue"' : ''}>Save &amp; approve</button></div>`}
     </form>`;
 
   if (!locked) {
@@ -197,8 +199,44 @@ function renderDetail(item) {
       await saveItem(item.id, false);
     });
     document.getElementById("approve-button").addEventListener("click", async () => {
+      const caseTypeSelect = document.getElementById("item-case-type-select");
+      if (caseTypeSelect && caseTypeSelect.value === "ISSUE") {
+        showAlert("Cannot approve: Report type is set to Issue. Please select Personal or Certified / Legal first.");
+        caseTypeSelect.focus();
+        caseTypeSelect.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
       await saveItem(item.id, true);
     });
+
+    const caseTypeSelect = document.getElementById("item-case-type-select");
+    if (caseTypeSelect) {
+      caseTypeSelect.addEventListener("change", () => {
+        const approveBtn = document.getElementById("approve-button");
+        const banner = document.getElementById("issue-case-type-banner");
+        if (caseTypeSelect.value !== "ISSUE") {
+          if (approveBtn) {
+            approveBtn.classList.remove("btn-locked-issue");
+            approveBtn.style.opacity = "1";
+            approveBtn.style.cursor = "pointer";
+            approveBtn.removeAttribute("title");
+          }
+          if (banner) {
+            banner.style.display = "none";
+          }
+        } else {
+          if (approveBtn) {
+            approveBtn.classList.add("btn-locked-issue");
+            approveBtn.style.opacity = "0.65";
+            approveBtn.style.cursor = "not-allowed";
+            approveBtn.title = "Cannot approve: Report type is set to Issue";
+          }
+          if (banner) {
+            banner.style.display = "flex";
+          }
+        }
+      });
+    }
   }
 }
 
@@ -350,7 +388,7 @@ uploadForm.addEventListener("submit", async (event) => {
   const formData = new FormData();
   formData.append("lab_source", labSourceRadio ? labSourceRadio.value : "EUROFINS");
   formData.append("review_mode", reviewModeRadio ? reviewModeRadio.value : "REVIEW");
-  formData.append("default_case_type", defaultCaseTypeRadio ? defaultCaseTypeRadio.value : "PERSONAL");
+  formData.append("default_case_type", defaultCaseTypeRadio ? defaultCaseTypeRadio.value : "ISSUE");
 
   for (const file of selectedFilesList) {
     formData.append("files", file);

@@ -16,7 +16,7 @@ const tabWordBtn = document.getElementById('tab-word-btn');
 const notionView = document.getElementById('notion-view');
 const wordView = document.getElementById('word-view');
 const fetchNotionBtn = document.getElementById('fetch-notion-btn');
-const forceFetchNotionBtn = document.getElementById('force-fetch-notion-btn');
+const editorRefreshNotionBtn = document.getElementById('editor-refresh-notion-btn');
 const notionStatusIndicator = document.getElementById('notion-status-indicator');
 const labFilterSelect = document.getElementById('lab-filter-select');
 const sortSelect = document.getElementById('sort-select');
@@ -91,9 +91,8 @@ if (tabNotionBtn && tabWordBtn) {
  * Notion Fetch Action & Cache Shield
  * ------------------------------------------------------------- */
 
-function fetchNotionData(forceRefresh = false) {
-    const title = forceRefresh ? 'Querying Notion Live...' : 'Fetching Manifest Batch from Notion...';
-    showLoader(true, title, 'Querying database, consolidating multi-part cases (>4 participants), and arranging parents before children.');
+function fetchNotionData(forceRefresh = true) {
+    showLoader(true, 'Querying Notion Live...', 'Querying database, consolidating multi-part cases (>4 participants), and arranging parents before children.');
     updateStatus('Connecting to Notion...', 'fa-circle-notch fa-spin');
 
     fetch('/api/notion/fetch', {
@@ -101,7 +100,7 @@ function fetchNotionData(forceRefresh = false) {
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ filter_mode: 'manifest_batch', force_refresh: forceRefresh })
+        body: JSON.stringify({ filter_mode: 'manifest_batch', force_refresh: true })
     })
     .then(response => {
         if (!response.ok) {
@@ -124,16 +123,15 @@ function fetchNotionData(forceRefresh = false) {
         populateLabDropdown(data.available_labs || []);
 
         // Filter and display
-        filterCasesByLab('ALL');
+        filterCasesByLab(currentLabFilter || 'ALL');
         if (autoDispatchLabel) autoDispatchLabel.style.display = 'inline-flex';
         if (autoDispatchCheckbox) autoDispatchCheckbox.checked = true;
         renderWorkspace();
 
         const multipartCount = allCases.filter(c => c.is_multipart).length;
-        const cacheNote = data.from_cache ? ' (cached)' : '';
         const msg = multipartCount > 0 
-            ? `Loaded ${allCases.length} cases from Notion${cacheNote} (${multipartCount} multi-part cases merged)!`
-            : `Loaded ${allCases.length} cases from Notion${cacheNote}!`;
+            ? `Loaded ${allCases.length} cases from Notion (${multipartCount} multi-part cases merged)!`
+            : `Loaded ${allCases.length} cases from Notion!`;
         showToast(msg, 'success');
     })
     .catch(error => {
@@ -145,10 +143,10 @@ function fetchNotionData(forceRefresh = false) {
 }
 
 if (fetchNotionBtn) {
-    fetchNotionBtn.addEventListener('click', () => fetchNotionData(false));
+    fetchNotionBtn.addEventListener('click', () => fetchNotionData(true));
 }
-if (forceFetchNotionBtn) {
-    forceFetchNotionBtn.addEventListener('click', () => fetchNotionData(true));
+if (editorRefreshNotionBtn) {
+    editorRefreshNotionBtn.addEventListener('click', () => fetchNotionData(true));
 }
 
 /* -------------------------------------------------------------
@@ -388,13 +386,126 @@ function handleFileSelect(file) {
 }
 
 /* -------------------------------------------------------------
- * Export to Excel Action
+ * Manifest Verification & Export Action
  * ------------------------------------------------------------- */
+
+function getUnverifiedManifestIssues() {
+    const issues = [];
+    cases.forEach((c, idx) => {
+        const caseNum = idx + 1;
+        const tag = c.bdo_tag || `Case #${caseNum}`;
+        const reasons = [];
+
+        if (c.ready_for_manifest === false) {
+            reasons.push("Review Pending in Notion (Consent forms or review incomplete)");
+        }
+        if (c.test_type && (c.test_type.includes("⚠️") || c.test_type.includes("CHECK:"))) {
+            reasons.push(`Notion Mismatch: ${c.test_type}`);
+        }
+        if (!c.bdo_tag || !c.bdo_tag.trim()) {
+            reasons.push("Missing BDO Tag / Reference Number");
+        }
+        if (!c.participants || c.participants.length === 0) {
+            reasons.push("No participants entered for case");
+        }
+
+        if (reasons.length > 0) {
+            issues.push({
+                caseIdx: idx,
+                caseNum,
+                tag,
+                reasons
+            });
+        }
+    });
+    return issues;
+}
+
+function showManifestVerificationModal(issues) {
+    let modal = document.getElementById('manifest-verification-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'manifest-verification-modal';
+        modal.className = 'modal-backdrop-custom';
+        document.body.appendChild(modal);
+    }
+
+    const rowsHtml = issues.map(iss => `
+        <tr style="border-bottom: 1px solid #F1F5F9;">
+            <td style="padding: 12px 14px; font-weight: 600; color: #1E293B; vertical-align: top;">Case #${iss.caseNum}</td>
+            <td style="padding: 12px 14px; font-family: monospace; font-size: 0.9rem; color: #0284C7; font-weight: 600; vertical-align: top;">${escapeHtml(iss.tag)}</td>
+            <td style="padding: 12px 14px; color: #B91C1C; vertical-align: top;">
+                ${iss.reasons.map(r => `<div style="margin-bottom: 4px; display: flex; align-items: flex-start; gap: 6px;"><i class="fa-solid fa-triangle-exclamation" style="margin-top: 3px; font-size: 0.85rem; color: #DC2626;"></i> <span>${escapeHtml(r)}</span></div>`).join('')}
+            </td>
+        </tr>
+    `).join('');
+
+    modal.innerHTML = `
+        <div class="modal-card" style="max-width: 720px; width: 92%; background: #ffffff; border-radius: 14px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); overflow: hidden;">
+            <div style="background: #FEF3C7; border-bottom: 1px solid #FDE68A; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 14px;">
+                    <div style="width: 42px; height: 42px; border-radius: 50%; background: #F59E0B; color: white; display: flex; align-items: center; justify-content: center; font-size: 1.25rem;">
+                        <i class="fa-solid fa-lock"></i>
+                    </div>
+                    <div>
+                        <h3 style="margin: 0; font-size: 1.18rem; font-weight: 700; color: #92400E; font-family: 'Outfit', sans-serif;">Export Locked: Unverified Cases Detected</h3>
+                        <p style="margin: 2px 0 0; font-size: 0.85rem; color: #B45309;">${issues.length} case${issues.length > 1 ? 's require' : ' requires'} verification in Notion before generating Excel.</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeManifestVerificationModal()" style="background: none; border: none; font-size: 1.35rem; color: #92400E; cursor: pointer; padding: 4px 8px; border-radius: 6px;">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            
+            <div style="padding: 22px 24px;">
+                <div style="background: #FFFBEB; border-left: 4px solid #F59E0B; padding: 14px 18px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; color: #92400E; line-height: 1.5;">
+                    <i class="fa-solid fa-circle-info" style="color: #F59E0B; margin-right: 6px;"></i>
+                    <strong>Action Required in Notion:</strong> Please open your Notion database and ensure <strong>Ready for Manifest</strong> is checked (consent reviewed) and case reference codes match the service. Afterwards, return here and click <strong>Fetch Notion Cases</strong> to refresh and export.
+                </div>
+
+                <div style="max-height: 280px; overflow-y: auto; border: 1px solid #E2E8F0; border-radius: 8px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.88rem; text-align: left;">
+                        <thead style="background: #F8FAFC; border-bottom: 1px solid #CBD5E1; position: sticky; top: 0; z-index: 2;">
+                            <tr>
+                                <th style="padding: 10px 14px; font-weight: 600; color: #475569; width: 90px;">Case #</th>
+                                <th style="padding: 10px 14px; font-weight: 600; color: #475569; width: 220px;">Reference Tag</th>
+                                <th style="padding: 10px 14px; font-weight: 600; color: #475569;">Required Action / Issue</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div style="background: #F8FAFC; border-top: 1px solid #E2E8F0; padding: 14px 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn btn-secondary" onclick="closeManifestVerificationModal()" style="padding: 9px 24px; font-weight: 600; font-size: 0.92rem;">
+                    Understood
+                </button>
+            </div>
+        </div>
+    `;
+
+    modal.style.display = 'flex';
+}
+
+function closeManifestVerificationModal() {
+    const modal = document.getElementById('manifest-verification-modal');
+    if (modal) modal.style.display = 'none';
+}
+window.closeManifestVerificationModal = closeManifestVerificationModal;
 
 if (exportExcelBtn) {
 exportExcelBtn.addEventListener('click', () => {
     if (cases.length === 0) {
         showToast('No case data to export', 'error');
+        return;
+    }
+
+    const issues = getUnverifiedManifestIssues();
+    if (issues.length > 0) {
+        showManifestVerificationModal(issues);
         return;
     }
 
@@ -560,6 +671,21 @@ function renderCards() {
     const badge = document.getElementById('cases-count-badge') || casesCountBadge;
     if (grid) grid.innerHTML = '';
     if (badge) badge.textContent = cases.length;
+
+    // Update Export button locked/unlocked state
+    const exportBtn = document.getElementById('export-excel-btn') || exportExcelBtn;
+    if (exportBtn) {
+        const unverified = getUnverifiedManifestIssues();
+        if (unverified.length > 0) {
+            exportBtn.classList.add('btn-export-locked');
+            exportBtn.innerHTML = `<i class="fa-solid fa-lock"></i> Export to Excel (${unverified.length} Unverified)`;
+            exportBtn.title = `Export Locked: ${unverified.length} case(s) require verification in Notion. Click to view details.`;
+        } else {
+            exportBtn.classList.remove('btn-export-locked');
+            exportBtn.innerHTML = `<i class="fa-solid fa-file-excel"></i> Export to Excel`;
+            exportBtn.title = 'Export verified cases to Excel manifest';
+        }
+    }
 
     cases.forEach((caseItem, caseIdx) => {
         const card = document.createElement('div');

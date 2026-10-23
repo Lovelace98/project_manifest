@@ -139,11 +139,8 @@
                                         <p>Directly source verified participant entries from your Notion <strong>Participant Lists</strong> database. Multi-part cases (&gt;4 participants across Part 1, Part 2, Part 3) are automatically consolidated, and parents always precede children.</p>
                                     </div>
                                     <div class="notion-actions">
-                                        <button id="fetch-notion-btn" class="btn btn-primary">
+                                        <button id="fetch-notion-btn" class="btn btn-primary" style="padding: 10px 24px; font-size: 0.95rem; font-weight: 600;">
                                             <i class="fa-solid fa-arrows-rotate"></i> Fetch Manifest Batch
-                                        </button>
-                                        <button id="force-fetch-notion-btn" class="btn btn-outline" title="Bypass cache and pull fresh from Notion">
-                                            <i class="fa-solid fa-bolt"></i> Force Refresh
                                         </button>
                                     </div>
                                 </div>
@@ -185,6 +182,9 @@
                                     </label>
                                     <button id="export-excel-btn" class="btn btn-primary">
                                         <i class="fa-solid fa-file-excel"></i> Export to Excel
+                                    </button>
+                                    <button id="editor-refresh-notion-btn" class="btn btn-outline" title="Pull latest verified cases and status updates directly from Notion">
+                                        <i class="fa-solid fa-arrows-rotate"></i> Refresh from Notion
                                     </button>
                                     <button id="upload-another-btn" class="btn btn-outline">
                                         <i class="fa-solid fa-rotate-left"></i> Source Another
@@ -285,7 +285,7 @@
                                             <span><strong>Auto-Upload Reports to Notion</strong><small>Automatically attach finalized PDFs to "Custody Pics" in Notion upon completion.</small></span>
                                         </label>
                                     </fieldset>
-                                    <input type="hidden" id="upload-default-case-type" name="default_case_type" value="{{ default_case_type or 'PERSONAL' }}">
+                                    <input type="hidden" id="upload-default-case-type" name="default_case_type" value="{{ default_case_type or 'ISSUE' }}">
                                 </div>
                                 <div class="panel-actions">
                                     <p>Only text-native PDF reports are supported.</p>
@@ -462,28 +462,6 @@
                                             <small>Process clean files automatically; quarantine exceptions for review.</small>
                                         </span>
                                     </label>
-                                </div>
-                                <div style="margin-top: 20px; border-top: 1px solid var(--brand-border); padding-top: 18px; margin-bottom: 20px;">
-                                    <div style="margin-bottom: 12px;">
-                                        <h4 style="font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 700; color: var(--brand-text); margin-bottom: 2px;">Fallback Report Type</h4>
-                                        <p style="font-size: 0.85rem; color: var(--brand-text-muted);">Applied as a fallback only when a report has an unrecognized case code prefix and is not found in Notion.</p>
-                                    </div>
-                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
-                                        <label class="choice-card" style="margin-top: 0;">
-                                            <input type="radio" name="page_settings_case_type" value="PERSONAL" {{ 'checked' if default_case_type == 'PERSONAL' else '' }}>
-                                            <span>
-                                                <strong>Personal (Default)</strong>
-                                                <small>Edited laboratory report only.</small>
-                                            </span>
-                                        </label>
-                                        <label class="choice-card" style="margin-top: 0;">
-                                            <input type="radio" name="page_settings_case_type" value="CERTIFIED_LEGAL" {{ 'checked' if default_case_type == 'CERTIFIED_LEGAL' else '' }}>
-                                            <span>
-                                                <strong>Certified / Legal</strong>
-                                                <small>Prepend legal verification pages.</small>
-                                            </span>
-                                        </label>
-                                    </div>
                                 </div>
 
                                 <div style="background: #F8FAFC; border: 1px solid var(--brand-border); border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 24px; font-size: 0.85rem; color: var(--brand-text-muted);">

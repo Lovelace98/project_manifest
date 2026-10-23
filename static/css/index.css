@@ -1009,3 +1009,35 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* Manifest Verification Modal & Locked Export Button */
+.btn-export-locked {
+    background: #F59E0B !important;
+    border-color: #D97706 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 2px 6px rgba(245, 158, 11, 0.3) !important;
+}
+.btn-export-locked:hover {
+    background: #D97706 !important;
+    border-color: #B45309 !important;
+}
+
+.modal-backdrop-custom {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.65);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+    padding: 1rem;
+}
+
+.btn-locked-issue {
+    opacity: 0.65 !important;
+    cursor: not-allowed !important;
+}

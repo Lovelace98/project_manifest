@@ -38,7 +38,13 @@ class VerificationError(RuntimeError):
 def _set_element_text(container: etree._Element, value: str) -> None:
     texts = container.xpath(".//w:t", namespaces=NS)
     if not texts:
-        raise VerificationError("Template slot contains no text node")
+        paragraph = container.find(".//w:p", NS)
+        if paragraph is None:
+            paragraph = etree.SubElement(container, f"{{{WORD_NS}}}p")
+        run = paragraph.find(".//w:r", NS)
+        if run is None:
+            run = etree.SubElement(paragraph, f"{{{WORD_NS}}}r")
+        texts = [etree.SubElement(run, f"{{{WORD_NS}}}t")]
     texts[0].text = value
     for extra in texts[1:]:
         extra.text = ""
@@ -101,7 +107,7 @@ def _compact_participant_row(
     for margin in row.xpath(".//w:tcMar/w:top | .//w:tcMar/w:bottom", namespaces=NS):
         margin.set(f"{{{WORD_NS}}}w", "20")
     for size in row.xpath(".//w:sz | .//w:szCs", namespaces=NS):
-        size.set(f"{{{WORD_NS}}}val", "15")
+        size.set(f"{{{WORD_NS}}}val", "19")
     for paragraph_properties in row.xpath(".//w:pPr", namespaces=NS):
         spacing = paragraph_properties.find("w:spacing", NS)
         if spacing is None:
@@ -179,7 +185,7 @@ def build_verification_docx(
         raise VerificationError("Verification participant table is missing")
     participant_table = tables[1]
     rows = participant_table.findall("w:tr", NS)
-    if len(rows) < 3:
+    if len(rows) < 2:
         raise VerificationError("Verification participant row prototypes are missing")
 
     header = rows[0]
@@ -187,18 +193,23 @@ def build_verification_docx(
     for row in rows[1:]:
         participant_table.remove(row)
 
-    should_compact = len(participants) >= 5 or any(len(p.full_name) > 26 for p in participants)
-    formatted_date = collection_date.strftime("%d/%m/%Y")
+    should_compact = len(participants) >= 5 or (
+        len(participants) == 4 and any(len(p.full_name) > 38 for p in participants)
+    )
     for participant in participants:
         row = deepcopy(prototype)
         _compact_participant_row(row, len(participants), force_compact=should_compact)
         cells = row.findall("w:tc", NS)
-        if len(cells) != 4:
-            raise VerificationError("Verification participant row must have four cells")
+        if len(cells) != 3:
+            raise VerificationError("Verification participant row must have three cells")
+        dob = (
+            participant.date_of_birth
+            if participant.date_of_birth and participant.date_of_birth != "-"
+            else "-"
+        )
         _set_element_text(cells[0], participant.full_name.upper())
         _set_element_text(cells[1], participant.role.upper())
-        _set_element_text(cells[2], "BUCCAL SWAB")
-        _set_element_text(cells[3], formatted_date)
+        _set_element_text(cells[2], dob)
         participant_table.append(row)
 
     if participant_table.findall("w:tr", NS)[0] is not header:

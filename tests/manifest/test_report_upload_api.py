@@ -145,3 +145,78 @@ def test_upload_single_item_notion_report_endpoint_success(auth_client, monkeypa
     updated_job = job_store.get(job.id)
     assert updated_job.items[0].notion_upload_status == "UPLOADED"
     assert updated_job.items[0].notion_page_id == "page-ss-123"
+
+
+def test_approve_endpoint_blocks_issue_case_type(auth_client, tmp_path):
+    job_store = app.state.job_store
+    job = JobRecord(
+        lab_source=LabSource.EUROFINS,
+        review_mode=ReviewMode.REVIEW,
+        default_case_type=CaseType.ISSUE,
+        expires_at=job_store.new_expiry(),
+    )
+    job_store.create(job)
+
+    out_file = tmp_path / "test_issue.pdf"
+    out_file.write_bytes(b"%PDF-1.4 dummy pdf")
+
+    item = JobItem(
+        original_filename="source.pdf",
+        stored_filename="stored.pdf",
+        source_path=out_file,
+        case_type=CaseType.ISSUE,
+        state=ItemState.NEEDS_REVIEW,
+        report=ReportData(
+            case_code="UNKNOWN-101026-01",
+            collection_date="2026-10-10",
+            test_type="PATERNITY",
+            participants=[
+                Participant(sample_number="S1", role="ALLEGED FATHER", full_name="JOHN DOE", date_of_birth="01/01/1980"),
+                Participant(sample_number="S2", role="CHILD", full_name="JANE DOE", date_of_birth="02/02/2015"),
+            ],
+        ),
+    )
+    job.items.append(item)
+    job_store.save(job)
+
+    res = auth_client.post(f"/api/jobs/{job.id}/items/{item.id}/approve")
+    assert res.status_code == 422
+    assert "Report type must be set to either Personal or Certified / Legal" in res.json()["detail"]
+
+
+def test_approve_endpoint_allows_personal_case_type(auth_client, tmp_path):
+    job_store = app.state.job_store
+    job = JobRecord(
+        lab_source=LabSource.EUROFINS,
+        review_mode=ReviewMode.REVIEW,
+        default_case_type=CaseType.PERSONAL,
+        expires_at=job_store.new_expiry(),
+    )
+    job_store.create(job)
+
+    out_file = tmp_path / "test_personal.pdf"
+    out_file.write_bytes(b"%PDF-1.4 dummy pdf")
+
+    item = JobItem(
+        original_filename="source.pdf",
+        stored_filename="stored.pdf",
+        source_path=out_file,
+        case_type=CaseType.PERSONAL,
+        state=ItemState.NEEDS_REVIEW,
+        report=ReportData(
+            case_code="PP-ACC-101026-01",
+            collection_date="2026-10-10",
+            test_type="PATERNITY",
+            participants=[
+                Participant(sample_number="S1", role="ALLEGED FATHER", full_name="JOHN DOE", date_of_birth="01/01/1980"),
+                Participant(sample_number="S2", role="CHILD", full_name="JANE DOE", date_of_birth="02/02/2015"),
+            ],
+        ),
+    )
+    job.items.append(item)
+    job_store.save(job)
+
+    res = auth_client.post(f"/api/jobs/{job.id}/items/{item.id}/approve")
+    assert res.status_code == 200
+    assert res.json()["approved"] is True
+

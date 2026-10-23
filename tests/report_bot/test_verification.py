@@ -62,8 +62,12 @@ def test_docx_is_patched_without_mutating_template(
 
     assert len(rows) == count + 1
     assert "CD-TEST-011026-01" in text
-    assert "BUCCAL SWAB" in text
-    assert "01/10/2026" in text
+    if count >= 2:
+        assert "01/01/2000" in text
+    else:
+        assert "-" in text
+    for row in rows[1:]:
+        assert len(row.findall("w:tc", NS)) == 3
     assert "{SO YOU ADD NEW ROWS" not in text
     assert all(person.full_name.upper() in text for person in participants(count))
     assert "+233 54 711 3957" in footer_text
