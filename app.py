@@ -78,6 +78,7 @@ from report_bot.integrity import (
     detect_layout_anomalies,
     fetch_notion_verification_data,
     determine_report_classification,
+    determine_test_type,
     cross_verify_participants,
 )
 import concurrent.futures
@@ -926,6 +927,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         reason = classification.get("reason")
                         if reason and reason not in item.report.warnings:
                             item.report.warnings.append(f"⚠️ {reason}")
+
+                    # 2b. Dual-source test type reconciliation (Notion + report participant roles)
+                    test_type_info = determine_test_type(
+                        item.report.test_type,
+                        item.report.participants,
+                        n_data,
+                    )
+                    item.report.test_type = test_type_info["test_type"]
+                    if test_type_info.get("needs_manual_review"):
+                        item.needs_manual_review = True
+                        tt_reason = test_type_info.get("reason")
+                        if tt_reason and tt_reason not in item.report.warnings:
+                            item.report.warnings.append(f"⚠️ {tt_reason}")
+                    elif test_type_info.get("reason"):
+                        notice = f"ℹ️ {test_type_info.get('reason')}"
+                        if notice not in item.report.warnings:
+                            item.report.warnings.append(notice)
 
                     # 3. Participant cross-verification against Notion Participant DB
                     n_parts = n_data.get("participants", []) if n_data else []

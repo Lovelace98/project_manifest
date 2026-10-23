@@ -210,6 +210,7 @@ def fetch_notion_verification_data(
         "notion_available": True,
         "found": False,
         "case_page_id": None,
+        "manifest_test_type": None,
         "test_or_service": [],
         "participants": [],
         "error": None,
@@ -279,6 +280,10 @@ def fetch_notion_verification_data(
                             if case_rel:
                                 result["case_page_id"] = case_rel[0].get("id")
                         props = row.get("properties", {})
+                        if not result.get("manifest_test_type"):
+                            m_type = extract_prop_text(props.get("Manifest Test Type")).strip().upper()
+                            if m_type:
+                                result["manifest_test_type"] = m_type
                         # P1
                         p1_name = extract_prop_text(props.get("P1 Name (Father or Lead)")).upper()
                         if p1_name:
@@ -434,6 +439,154 @@ def determine_report_classification(
         "reason": reason,
         "badge_label": "Type Conflict (Review Needed)",
         "badge_status": "warning",
+    }
+
+
+def normalize_test_type(val: str) -> str | None:
+    if not val:
+        return None
+    s = str(val).strip().upper()
+    # Strip prefixes like "LEGAL ", "PRIVATE ", "PERSONAL " and suffixes like " TEST", " CERTIFICATE"
+    s = re.sub(r"^(LEGAL|PRIVATE|PERSONAL)\s+", "", s)
+    s = re.sub(r"\s+(TEST|CERTIFICATE)$", "", s)
+    s = s.strip()
+
+    if "PATERNITY" in s and "MATERNITY" in s:
+        return "PATERNITY + MATERNITY"
+    if "PATERNITY" in s:
+        if "PRENATAL" in s:
+            return "PRENATAL PATERNITY"
+        return "PATERNITY"
+    if "MATERNITY" in s:
+        return "MATERNITY"
+    if "SINGLE PROFILE" in s or "DNA PROFILE" in s:
+        return "SINGLE PROFILE"
+    if "SIBLING" in s:
+        return "SIBLINGSHIP"
+    if "AVUNCULAR" in s or "AUNT" in s or "UNCLE" in s:
+        return "AVUNCULAR"
+    if "GRANDPARENT" in s or "GRAND" in s:
+        return "GRANDPARENTAGE"
+    if "Y-CHROMOSOME" in s or "Y CHROMOSOME" in s or "Y-STR" in s:
+        return "Y-CHROMOSOME"
+    if "MITOCHONDRIAL" in s or "MTDNA" in s:
+        return "MITOCHONDRIAL"
+    if "ZYGOSITY" in s or "TWIN" in s:
+        return "ZYGOSITY"
+    if "GENDER" in s:
+        return "GENDER"
+    return s if s else None
+
+
+def determine_test_type(
+    current_test_type: str,
+    participants: list[Participant],
+    notion_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Reconciles the report test type against Notion database metadata
+    ('Manifest Test Type' from Participant DB and 'Test or Service' from Cases DB)
+    and participant roles.
+    Enforces the Single Profile guardrail (cannot be Single Profile if >1 participant).
+    """
+    current_norm = normalize_test_type(current_test_type) or (current_test_type.strip().upper() if current_test_type else "PATERNITY")
+
+    # 1. Evaluate participant roles
+    roles = " ".join(p.role.upper() for p in participants)
+    has_alleged_father = "ALLEGED FATHER" in roles or ("FATHER" in roles and "ALLEGED" in roles)
+    has_alleged_mother = "ALLEGED MOTHER" in roles or ("MOTHER" in roles and "ALLEGED" in roles and "FATHER" not in roles)
+    has_child = any(r in roles for r in ("CHILD", "DAUGHTER", "SON"))
+
+    role_inferred: str | None = None
+    if has_alleged_father and has_alleged_mother and has_child:
+        role_inferred = "PATERNITY + MATERNITY"
+    elif has_alleged_father:
+        role_inferred = "PATERNITY"
+    elif has_alleged_mother:
+        role_inferred = "MATERNITY"
+    elif "SIBLING" in roles:
+        role_inferred = "SIBLINGSHIP"
+    elif "AUNT" in roles or "UNCLE" in roles:
+        role_inferred = "AVUNCULAR"
+    elif "GRAND" in roles:
+        role_inferred = "GRANDPARENTAGE"
+    elif "Y-CHROMOSOME" in roles or "Y-STR" in roles:
+        role_inferred = "Y-CHROMOSOME"
+
+    # 2. Extract candidate from Notion
+    notion_candidate: str | None = None
+    if notion_data and notion_data.get("found"):
+        m_type = notion_data.get("manifest_test_type")
+        if m_type:
+            notion_candidate = normalize_test_type(m_type)
+
+        if not notion_candidate:
+            for tag in notion_data.get("test_or_service", []):
+                norm_tag = normalize_test_type(tag)
+                if norm_tag and norm_tag not in (
+                    "LEGAL", "PRIVATE", "PERSONAL", "ADDITIONAL PARTIES",
+                    "ADDITIONAL PARTY", "SELF-COLLECTION KIT", "DISCREET"
+                ):
+                    notion_candidate = norm_tag
+                    break
+
+    # 3. Single Profile Guardrail: multiple participants cannot be Single Profile
+    is_multi_participant = len(participants) > 1
+    if current_norm == "SINGLE PROFILE" and is_multi_participant:
+        fallback = notion_candidate or role_inferred or "PATERNITY"
+        return {
+            "test_type": fallback,
+            "verified": bool(notion_candidate and notion_candidate == fallback),
+            "needs_manual_review": False,
+            "reason": f"Auto-corrected Single Profile to {fallback}: report contains {len(participants)} participants.",
+        }
+
+    # 4. Notion reconciliation
+    if notion_candidate:
+        if notion_candidate == current_norm:
+            return {
+                "test_type": current_norm,
+                "verified": True,
+                "needs_manual_review": False,
+                "reason": None,
+            }
+
+        # If current was inferred without explicit certificate title, or Notion enriches it
+        if role_inferred and notion_candidate == role_inferred:
+            return {
+                "test_type": notion_candidate,
+                "verified": True,
+                "needs_manual_review": False,
+                "reason": None,
+            }
+
+        # Direct conflict between Notion and participant roles (e.g. Notion says Maternity but report has Father)
+        if role_inferred and role_inferred != notion_candidate:
+            return {
+                "test_type": current_norm,
+                "verified": False,
+                "needs_manual_review": True,
+                "reason": f"Test Type Mismatch: Notion indicates '{notion_candidate}' but report participants indicate '{role_inferred}'. Manual review required.",
+            }
+
+        # Otherwise adopt Notion's explicit test type
+        return {
+            "test_type": notion_candidate,
+            "verified": True,
+            "needs_manual_review": False,
+            "reason": None,
+        }
+
+    # If Notion is unavailable or case not found in Notion
+    final_type = role_inferred or current_norm
+    if final_type == "SINGLE PROFILE" and is_multi_participant:
+        final_type = "PATERNITY"
+
+    return {
+        "test_type": final_type,
+        "verified": False,
+        "needs_manual_review": False,
+        "reason": None,
     }
 
 

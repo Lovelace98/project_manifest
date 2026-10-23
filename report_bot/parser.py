@@ -34,7 +34,6 @@ KNOWN_TEST_TYPES = (
     ("TWIN", "ZYGOSITY"),
     ("PATERNITY", "PATERNITY"),
     ("MATERNITY", "MATERNITY"),
-    ("PERSONAL TEST", "SINGLE PROFILE"),
     ("SINGLE PROFILE", "SINGLE PROFILE"),
     ("DNA PROFILE", "SINGLE PROFILE"),
 )
@@ -125,15 +124,16 @@ def _group_rows(words: list[Word], start_y: float, end_y: float) -> list[list[Wo
 
 def _parse_participants(words: list[Word]) -> list[Participant]:
     sample_header, role_header, name_header, date_header = _find_header(words)
+    start_y = sample_header.y0 + 3.5
     dna_candidates = [
         word.y0
         for word in words
-        if word.y0 > sample_header.y1 and word.text.upper() == "DNA"
+        if word.y0 > start_y and word.text.upper() == "DNA"
     ]
     table_end = min(dna_candidates) if dna_candidates else float("inf")
 
     participants: list[Participant] = []
-    for row in _group_rows(words, sample_header.y1, table_end):
+    for row in _group_rows(words, start_y, table_end):
         row = sorted(row, key=lambda word: word.x0)
         if role_header:
             sample = " ".join(word.text for word in row if word.x0 < role_header.x0).strip()
@@ -246,7 +246,11 @@ def _infer_test_type(
     if first_page_words:
         title_candidates = [w for w in first_page_words if 110 <= w.y0 <= 200]
         title_line = " ".join(w.text.upper() for w in title_candidates)
-        if "PERSONAL TEST" in title_line or "SINGLE PROFILE" in title_line:
+        if (
+            ("SINGLE PROFILE" in title_line or "DNA PROFILE" in title_line)
+            and len(participants) == 1
+            and not (has_alleged_mother or has_alleged_father)
+        ):
             return "SINGLE PROFILE", True
         if "MATERNITY" in title_line:
             return "MATERNITY", True
@@ -270,11 +274,13 @@ def _infer_test_type(
             return "ZYGOSITY", True
 
     # 2. Strict participant role verification
-    if any(p.role.upper() in ("PARTICIPANT", "INDIVIDUAL") for p in participants) and not (
-        has_alleged_mother or has_alleged_father
+    if (
+        len(participants) == 1
+        and any(p.role.upper() in ("PARTICIPANT", "INDIVIDUAL") for p in participants)
+        and not (has_alleged_mother or has_alleged_father)
     ):
         upper = " ".join(text.upper().split())
-        if "PERSONAL TEST" in upper or "SINGLE PROFILE" in upper:
+        if "SINGLE PROFILE" in upper or "DNA PROFILE" in upper or "PERSONAL TEST" in upper:
             return "SINGLE PROFILE", True
     if has_alleged_mother and not has_alleged_father:
         return "MATERNITY", False
@@ -299,6 +305,8 @@ def _infer_test_type(
     upper = " ".join(text.upper().split())
     for token, normalized in KNOWN_TEST_TYPES:
         if token in upper:
+            if normalized == "SINGLE PROFILE" and len(participants) > 1:
+                continue
             if normalized == "PATERNITY" and has_alleged_mother and not has_alleged_father:
                 return "MATERNITY", False
             return normalized, True
