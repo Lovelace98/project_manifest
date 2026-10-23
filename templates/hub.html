@@ -237,14 +237,14 @@
                                     <p class="eyebrow">NEW BATCH</p>
                                     <h2 id="upload-title">Upload reports</h2>
                                 </div>
-                                <span class="status-chip status-neutral">PDF · MAX {{ max_batch_files or 25 }}</span>
+                                <span class="status-chip status-neutral">PDF / ZIP · MAX {{ max_batch_files or 25 }}</span>
                             </div>
                             <form id="upload-form">
                                 <label id="drop-zone" class="drop-zone" for="pdf-files">
                                     <span class="drop-icon" aria-hidden="true">⇧</span>
-                                    <strong>Drop report PDFs here</strong>
+                                    <strong>Drop report PDFs or ZIP archive here</strong>
                                     <span>or choose files from your computer</span>
-                                    <input id="pdf-files" name="files" type="file" accept="application/pdf,.pdf" multiple>
+                                    <input id="pdf-files" name="files" type="file" accept="application/pdf,.pdf,.zip,application/zip,application/x-zip-compressed" multiple>
                                 </label>
                                 <div id="selected-files" class="selected-files" aria-live="polite"></div>
                                 <div class="batch-controls">

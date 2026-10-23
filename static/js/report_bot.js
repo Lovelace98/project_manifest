@@ -173,22 +173,34 @@ function displaySelectedFiles() {
     selectedFiles.textContent = "No files selected.";
     return;
   }
-  selectedFiles.innerHTML = selectedFilesList.map((file, index) => `
+  selectedFiles.innerHTML = selectedFilesList.map((file, index) => {
+    const isZip = file.name.toLowerCase().endsWith(".zip");
+    const iconHtml = isZip
+      ? '<i class="fa-solid fa-file-zipper" style="color: #7c3aed; margin-right: 8px;"></i>'
+      : '<i class="fa-regular fa-file-pdf" style="color: #0284c7; margin-right: 8px;"></i>';
+    const badgeHtml = isZip
+      ? '<span class="file-tag-badge" style="margin-left: 8px; font-size: 0.72rem; padding: 2px 8px; background: #faf5ff; color: #6b21a8; border: 1px solid #e9d5ff; border-radius: 999px;"><i class="fa-solid fa-box-open"></i> ZIP Archive (Auto-Unpack)</span>'
+      : '<span class="file-tag-badge" style="margin-left: 8px; font-size: 0.72rem; padding: 2px 8px; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 999px;"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Detect Type</span>';
+    return `
     <div class="selected-file-row">
       <div class="selected-file-meta">
-        <i class="fa-regular fa-file-pdf" style="color: #0284c7; margin-right: 8px;"></i>
+        ${iconHtml}
         <strong>${escapeHtml(file.name)}</strong>
-        <span class="file-tag-badge" style="margin-left: 8px; font-size: 0.72rem; padding: 2px 8px; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 999px;">
-          <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Detect Type
-        </span>
+        ${badgeHtml}
       </div>
       <button type="button" class="file-remove-button" data-index="${index}" title="Remove file" aria-label="Remove ${escapeHtml(file.name)}">×</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 
 function handleNewFiles(incomingFiles) {
   const currentNames = new Set(selectedFilesList.map((f) => f.name));
   for (const file of Array.from(incomingFiles || [])) {
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".pdf") && !lowerName.endsWith(".zip")) {
+      showAlert(`'${file.name}' is not supported. Please select PDF reports or a ZIP archive.`);
+      continue;
+    }
     if (!currentNames.has(file.name) && selectedFilesList.length < maxBatchFiles) {
       selectedFilesList.push(file);
       currentNames.add(file.name);
@@ -956,7 +968,7 @@ if (uploadForm) {
       notionSyncBanner.className = "alert is-hidden";
     }
     if (!selectedFilesList.length || selectedFilesList.length > maxBatchFiles) {
-      showAlert(`Choose between 1 and ${maxBatchFiles} PDF files.`);
+      showAlert(`Choose between 1 and ${maxBatchFiles} PDF files or a ZIP archive.`);
       return;
     }
     const button = document.getElementById("upload-button");

@@ -4,6 +4,7 @@ import os
 import io
 import re
 import time
+import zipfile
 import secrets
 import asyncio
 import hashlib
@@ -724,15 +725,96 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auto_upload_notion: Annotated[bool, Form()] = False,
     ):
         _require_mutation(request)
-        if not files or len(files) > application_settings.max_batch_files:
+        if not files:
             raise HTTPException(
                 status_code=400,
-                detail=f"Upload between 1 and {application_settings.max_batch_files} PDF files",
+                detail="Upload between 1 and 25 PDF reports or a ZIP archive",
             )
-        if case_types is not None and len(case_types) != len(files):
+
+        # 1. Unpack incoming files (supporting PDFs, ZIP archives, or a mix)
+        extracted_entries: list[tuple[str, bytes, CaseType]] = []
+        skipped_non_pdfs: list[str] = []
+
+        for file_index, upload in enumerate(files):
+            browser_filename = (upload.filename or "upload").replace("\\", "/")
+            orig_name = Path(browser_filename).name
+            upload_content = await upload.read(application_settings.max_batch_bytes + 1)
+            await upload.close()
+
+            is_zip = orig_name.lower().endswith(".zip") or upload_content.startswith(b"PK\x03\x04")
+
+            if is_zip:
+                try:
+                    with zipfile.ZipFile(io.BytesIO(upload_content)) as archive:
+                        for member in archive.infolist():
+                            # Skip directories
+                            if member.is_dir() or member.filename.endswith("/"):
+                                continue
+                            raw_name = Path(member.filename.replace("\\", "/")).name
+                            # Skip macOS metadata and hidden system files
+                            if (
+                                member.filename.startswith("__MACOSX/")
+                                or raw_name.startswith("._")
+                                or raw_name == ".DS_Store"
+                            ):
+                                continue
+
+                            # Check if PDF
+                            if raw_name.lower().endswith(".pdf"):
+                                if member.file_size > application_settings.max_file_bytes:
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=f"File '{raw_name}' in ZIP exceeds the 25 MB file limit",
+                                    )
+                                pdf_bytes = archive.read(member)
+                                item_case_type = (
+                                    case_types[file_index]
+                                    if case_types is not None and file_index < len(case_types)
+                                    else default_case_type
+                                )
+                                extracted_entries.append((raw_name, pdf_bytes, item_case_type))
+                            else:
+                                skipped_non_pdfs.append(raw_name)
+                except zipfile.BadZipFile:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Corrupted or invalid ZIP archive: '{orig_name}'",
+                    )
+                except RuntimeError as exc:
+                    if "password" in str(exc).lower():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"ZIP archive '{orig_name}' is password protected.",
+                        )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Error reading ZIP archive '{orig_name}': {exc}",
+                    )
+            elif orig_name.lower().endswith(".pdf"):
+                item_case_type = (
+                    case_types[file_index]
+                    if case_types is not None and file_index < len(case_types)
+                    else default_case_type
+                )
+                extracted_entries.append((orig_name, upload_content, item_case_type))
+            else:
+                skipped_non_pdfs.append(orig_name)
+
+        if not extracted_entries:
+            if skipped_non_pdfs:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The uploaded archive contains no readable PDF reports. (Skipped: {', '.join(skipped_non_pdfs[:5])})",
+                )
             raise HTTPException(
                 status_code=400,
-                detail="Every uploaded PDF must have one report type",
+                detail=f"Upload between 1 and {application_settings.max_batch_files} PDF files or a ZIP archive",
+            )
+
+        if len(extracted_entries) > application_settings.max_batch_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The uploaded files contain {len(extracted_entries)} PDF reports, which exceeds the limit of {application_settings.max_batch_files}.",
             )
 
         job = JobRecord(
@@ -748,12 +830,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         seen_digests: set[str] = set()
 
         try:
-            for file_index, upload in enumerate(files):
-                browser_filename = (upload.filename or "report.pdf").replace("\\", "/")
-                original_filename = Path(browser_filename).name
-                item_case_type = (
-                    case_types[file_index] if case_types is not None else default_case_type
-                )
+            for original_filename, content, item_case_type in extracted_entries:
                 item = JobItem(
                     original_filename=original_filename,
                     stored_filename="",
@@ -766,7 +843,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         raise ReportParseError("Filename exceeds the supported length")
                     if Path(original_filename).suffix.lower() != ".pdf":
                         raise ReportParseError("Only PDF files are supported")
-                    content = await upload.read(application_settings.max_file_bytes + 1)
                     total_bytes += len(content)
                     if len(content) > application_settings.max_file_bytes:
                         raise ReportParseError("PDF exceeds the 25 MB file limit")
@@ -791,8 +867,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except ReportParseError as exc:
                     item.state = ItemState.FAILED
                     item.parse_error = str(exc)
-                finally:
-                    await upload.close()
+
+            if skipped_non_pdfs:
+                unique_skipped = list(dict.fromkeys(skipped_non_pdfs))
+                skip_msg = f"⚠️ Skipped non-PDF files from ZIP: {', '.join(unique_skipped[:10])}{' ...' if len(unique_skipped) > 10 else ''}"
+                for item in job.items:
+                    if item.report and skip_msg not in item.report.warnings:
+                        item.report.warnings.append(skip_msg)
 
             # Run integrity, layout anomaly detection & Notion cross-verification
             parsed_items = [item for item in job.items if item.report and item.state != ItemState.FAILED]

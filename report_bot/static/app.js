@@ -82,6 +82,11 @@ function displaySelectedFiles() {
 function handleNewFiles(incomingFiles) {
   const currentNames = new Set(selectedFilesList.map((f) => f.name));
   for (const file of Array.from(incomingFiles || [])) {
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".pdf") && !lowerName.endsWith(".zip")) {
+      showAlert(`'${file.name}' is not supported. Please select PDF reports or a ZIP archive.`);
+      continue;
+    }
     if (!currentNames.has(file.name) && selectedFilesList.length < maxBatchFiles) {
       selectedFilesList.push(file);
       currentNames.add(file.name);
@@ -374,7 +379,7 @@ uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAlert();
   if (!selectedFilesList.length || selectedFilesList.length > maxBatchFiles) {
-    showAlert(`Choose between 1 and ${maxBatchFiles} PDF files.`);
+    showAlert(`Choose between 1 and ${maxBatchFiles} PDF files or a ZIP archive.`);
     return;
   }
   const button = document.getElementById("upload-button");
