@@ -22,6 +22,10 @@ COPY . .
 COPY ["verification page template.docx", "./verification page template.docx"]
 COPY ["verification page template.dotx", "./verification page template.dotx"]
 
+# Install genuine Microsoft TrueType Arial fonts
+COPY fonts/ /usr/local/share/fonts/msttcorefonts/
+RUN fc-cache -f -v
+
 RUN useradd -m appuser \
     && mkdir -p /app/data/jobs \
     && chown -R appuser:appuser /app /home/appuser

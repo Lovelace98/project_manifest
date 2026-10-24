@@ -17,7 +17,6 @@ const fileRail = document.getElementById("file-rail");
 const reviewDetail = document.getElementById("review-detail");
 const processButton = document.getElementById("process-button");
 const downloadButton = document.getElementById("download-button");
-const syncNotionButton = document.getElementById("sync-notion-button");
 const uploadNotionButton = document.getElementById("upload-notion-button");
 const notionSyncBanner = document.getElementById("notion-sync-banner");
 const autoSyncNotionCheckbox = document.getElementById("auto-sync-notion");
@@ -32,7 +31,6 @@ const summaryFlaggedCount = document.getElementById("summary-flagged-count");
 const summaryNotionCount = document.getElementById("summary-notion-count");
 const summaryBadge = document.getElementById("summary-badge");
 const summaryDownloadBtn = document.getElementById("summary-download-btn");
-const summarySyncNotionBtn = document.getElementById("summary-sync-notion-btn");
 const summaryUploadNotionBtn = document.getElementById("summary-upload-notion-btn");
 const summaryBackReviewBtn = document.getElementById("summary-back-review-btn");
 const summaryNewBatchBtn = document.getElementById("summary-new-batch-btn");
@@ -544,10 +542,6 @@ function renderJob() {
     viewSummaryButton.classList.toggle("is-hidden", !(job.download_ready || job.state === "COMPLETE"));
   }
 
-  const hasCaseCodes = job.items.some((item) => item.report && item.report.case_code);
-  if (syncNotionButton) {
-    syncNotionButton.classList.toggle("is-hidden", !hasCaseCodes);
-  }
   const hasCompletedItems = job.items.some((item) => item.state === "COMPLETE" && item.output_filename);
   if (uploadNotionButton) {
     uploadNotionButton.classList.toggle("is-hidden", !hasCompletedItems);
@@ -655,11 +649,6 @@ function renderBatchSummary(job) {
     } else {
       summaryDownloadBtn.classList.add("is-hidden");
     }
-  }
-
-  if (summarySyncNotionBtn) {
-    const hasCaseCodes = job.items.some((item) => item.report && item.report.case_code);
-    summarySyncNotionBtn.classList.toggle("is-hidden", !hasCaseCodes);
   }
 
   if (summaryUploadNotionBtn) {
@@ -1029,14 +1018,6 @@ if (processButton) {
   });
 }
 
-if (syncNotionButton) {
-  syncNotionButton.addEventListener("click", () => {
-    if (state.job?.id) {
-      syncNotionStatus(state.job.id);
-    }
-  });
-}
-
 const newBatchBtn = document.getElementById("new-batch-button");
 if (newBatchBtn) {
   newBatchBtn.addEventListener("click", () => {
@@ -1069,14 +1050,6 @@ if (summaryBackReviewBtn) {
 if (summaryNewBatchBtn) {
   summaryNewBatchBtn.addEventListener("click", () => {
     if (newBatchBtn) newBatchBtn.click();
-  });
-}
-
-if (summarySyncNotionBtn) {
-  summarySyncNotionBtn.addEventListener("click", () => {
-    if (state.job?.id) {
-      syncNotionStatus(state.job.id);
-    }
   });
 }
 

@@ -234,16 +234,23 @@ def build_verification_docx(
         after_twips = "120"
 
     for p in body.findall("w:p", NS):
-        if "Medical Director" in "".join(p.xpath(".//w:t/text()", namespaces=NS)):
+        p_text = "".join(p.xpath(".//w:t/text()", namespaces=NS))
+        if "Dr. Abeiku Ghansah" in p_text or "Medical Director" in p_text:
             p_pr = p.find("w:pPr", NS)
             if p_pr is None:
                 p_pr = etree.Element(f"{{{WORD_NS}}}pPr")
                 p.insert(0, p_pr)
-            spacing = p_pr.find("w:spacing", NS)
-            if spacing is None:
-                spacing = etree.SubElement(p_pr, f"{{{WORD_NS}}}spacing")
-            spacing.set(f"{{{WORD_NS}}}after", after_twips)
-            break
+            for r_pr in [p_pr.find("w:rPr", NS), *p.xpath(".//w:r/w:rPr", namespaces=NS)]:
+                if r_pr is not None:
+                    for sz in r_pr.xpath("./w:sz | ./w:szCs", namespaces=NS):
+                        r_pr.remove(sz)
+                    etree.SubElement(r_pr, f"{{{WORD_NS}}}sz").set(f"{{{WORD_NS}}}val", "22")
+                    etree.SubElement(r_pr, f"{{{WORD_NS}}}szCs").set(f"{{{WORD_NS}}}val", "22")
+            if "Medical Director" in p_text:
+                spacing = p_pr.find("w:spacing", NS)
+                if spacing is None:
+                    spacing = etree.SubElement(p_pr, f"{{{WORD_NS}}}spacing")
+                spacing.set(f"{{{WORD_NS}}}after", after_twips)
 
     footer = etree.fromstring(parts["word/footer1.xml"])
     footer_paragraphs = footer.xpath("//w:p", namespaces=NS)
